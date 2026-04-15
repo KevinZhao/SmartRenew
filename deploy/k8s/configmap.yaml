@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: smartrenew-config
+  namespace: smartrenew
+data:
+  config.json: |
+    {
+      "accounts_file": "/etc/smartrenew/accounts/accounts.json",
+      "notifiers": [
+        {
+          "enabled": false,
+          "type": "lark",
+          "webhook_url": ""
+        }
+      ],
+      "remind_days": [30, 14, 7, 3, 1],
+      "listen_addr": ":5000",
+      "db_path": "/data/smartrenew.db"
+    }

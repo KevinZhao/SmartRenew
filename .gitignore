@@ -1,0 +1,11 @@
+data/
+*.db
+*.db-shm
+*.db-wal
+config.json
+smartrenew
+smartrenew.exe
+node_modules/
+test-results/
+e2e-*.png
+.claude/

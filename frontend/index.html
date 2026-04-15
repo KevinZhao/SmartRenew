@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartRenew</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/vue.global.prod.js"></script>
+</head>
+<body>
+<div id="app">
+    <div class="header">
+        <h1>SmartRenew</h1>
+        <div class="actions">
+            <span v-if="message" :class="['msg', messageErr ? 'err' : '']">{{ message }}</span>
+            <button class="btn btn-white" @click="syncData">Sync AWS</button>
+            <button class="btn btn-white" @click="exportCSV">Export CSV</button>
+            <label class="btn btn-white" style="cursor:pointer">
+                Import CSV
+                <input type="file" accept=".csv" @change="importFile" style="display:none">
+            </label>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Stats -->
+        <div class="stats">
+            <div class="stat-card">
+                <div class="label">Total</div>
+                <div class="value">{{ stats.total }}</div>
+            </div>
+            <div class="stat-card critical" v-if="stats.expired > 0">
+                <div class="label">Expired</div>
+                <div class="value">{{ stats.expired }}</div>
+            </div>
+            <div class="stat-card critical">
+                <div class="label">&le;7 days</div>
+                <div class="value">{{ stats.critical }}</div>
+            </div>
+            <div class="stat-card warning">
+                <div class="label">&le;30 days</div>
+                <div class="value">{{ stats.warning }}</div>
+            </div>
+            <div class="stat-card ok">
+                <div class="label">&gt;30 days</div>
+                <div class="value">{{ stats.active }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">SP / CB / ODCR / RI</div>
+                <div class="value" style="font-size:18px">{{ stats.sp }} / {{ stats.cb }} / {{ stats.odcr }} / {{ stats.ri }}</div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab" :class="{active: activeTab==='dashboard'}" @click="activeTab='dashboard'">Dashboard</button>
+            <button class="tab" :class="{active: activeTab==='alerts'}" @click="activeTab='alerts'; loadAlerts()">Alerts</button>
+            <button class="tab" :class="{active: activeTab==='accounts'}" @click="activeTab='accounts'; loadAccounts()">Accounts</button>
+        </div>
+
+        <!-- Dashboard -->
+        <div v-if="activeTab==='dashboard'">
+            <div class="filter-bar">
+                <select v-model="filterType">
+                    <option value="">All Types</option>
+                    <option value="sp">Savings Plans</option>
+                    <option value="cb">Capacity Blocks</option>
+                    <option value="odcr">ODCR</option>
+                    <option value="ri">Reserved Instances</option>
+                </select>
+                <select v-model="filterAccount">
+                    <option value="">All Accounts</option>
+                    <option v-for="a in uniqueAccounts" :value="a.account_id">{{ a.account_alias }} ({{ a.account_id }})</option>
+                </select>
+                <input type="text" v-model="searchText" placeholder="Search instance type, resource ID...">
+            </div>
+            <div class="table-wrap">
+                <div v-if="loading" class="loading">Loading...</div>
+                <table v-else-if="filteredReservations.length">
+                    <thead>
+                        <tr>
+                            <th>Account</th>
+                            <th>Region</th>
+                            <th>Type</th>
+                            <th>Resource ID</th>
+                            <th>Instance Type</th>
+                            <th>Qty</th>
+                            <th>Start</th>
+                            <th>End</th>
+                            <th>Days Left</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="r in filteredReservations" :key="r.id">
+                            <td>{{ r.account_alias }}</td>
+                            <td>{{ r.region }}</td>
+                            <td><span :class="'badge badge-' + r.type">{{ r.type.toUpperCase() }}</span></td>
+                            <td style="font-family:monospace;font-size:12px">{{ r.resource_id }}</td>
+                            <td>{{ r.instance_type }}</td>
+                            <td>{{ r.quantity }}</td>
+                            <td>{{ formatDate(r.start_time) }}</td>
+                            <td>{{ formatDate(r.end_time) }}</td>
+                            <td>
+                                <span v-if="daysUntil(r.end_time) !== null" :class="daysClass(daysUntil(r.end_time))">
+                                    {{ daysDisplay(daysUntil(r.end_time)) }}
+                                </span>
+                                <span v-else>-</span>
+                            </td>
+                            <td>{{ r.status }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div v-else class="empty">
+                    <div>No data yet. Sync from AWS or import a CSV file.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerts -->
+        <div v-if="activeTab==='alerts'">
+            <div class="table-wrap" v-if="alerts && alerts.length">
+                <div v-for="a in alerts" :key="a.id" class="alert-item">
+                    <div class="alert-days" :style="{color: levelColor(a.level)}">{{ a.days_left }}d</div>
+                    <div class="alert-info">
+                        <div class="title">
+                            <span :class="'badge badge-' + a.type">{{ a.type.toUpperCase() }}</span>
+                            {{ a.instance_type }} &mdash; {{ a.account_alias }}
+                        </div>
+                        <div class="meta">{{ a.resource_id }} | {{ a.region }} | Expires {{ formatDate(a.end_time) }}</div>
+                    </div>
+                    <span :class="'badge badge-' + a.level">{{ levelText(a.level) }}</span>
+                </div>
+            </div>
+            <div v-else class="empty">
+                <div>No upcoming expirations within 30 days.</div>
+            </div>
+        </div>
+
+        <!-- Accounts -->
+        <div v-if="activeTab==='accounts'">
+            <div class="filter-bar">
+                <input type="text" v-model="accountSearch" placeholder="Search account name, ID, email, tag...">
+            </div>
+            <div class="table-wrap">
+                <div v-if="accountsLoading" class="loading">Loading...</div>
+                <table v-else-if="filteredAccounts.length">
+                    <thead>
+                        <tr>
+                            <th>Account Name</th>
+                            <th>Account ID</th>
+                            <th>Email</th>
+                            <th>Status</th>
+                            <th>Joined</th>
+                            <th>Joined At</th>
+                            <th>Tag</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="a in filteredAccounts" :key="a.account_id">
+                            <td>{{ a.account_name }}</td>
+                            <td style="font-family:monospace">{{ a.account_id }}</td>
+                            <td>{{ a.email }}</td>
+                            <td>
+                                <span :class="a.status === 'ACTIVE' ? 'badge badge-normal' : 'badge badge-critical'">{{ a.status }}</span>
+                            </td>
+                            <td>{{ a.joined_method }}</td>
+                            <td>{{ formatDate(a.joined_at) }}</td>
+                            <td>
+                                <span v-if="editingAccountId !== a.account_id" @click="startEditTag(a)" style="cursor:pointer;min-width:80px;display:inline-block">
+                                    {{ a.tag || '—' }}
+                                </span>
+                                <input v-else type="text" v-model="editingTag" @keyup.enter="saveTag(a)" @keyup.escape="cancelEditTag" class="tag-input" ref="tagInput">
+                            </td>
+                            <td>
+                                <button v-if="editingAccountId === a.account_id" class="btn btn-primary btn-sm" @click="saveTag(a)">Save</button>
+                                <button v-if="editingAccountId === a.account_id" class="btn btn-outline btn-sm" @click="cancelEditTag" style="margin-left:4px">Cancel</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div v-else class="empty">
+                    <div>No accounts. Click "Sync AWS" to fetch organization accounts.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="/static/js/app.js"></script>
+</body>
+</html>

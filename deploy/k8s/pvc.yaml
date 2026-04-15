@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: smartrenew-data
+  namespace: smartrenew
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Use gp2 for stock EKS compatibility. Change to gp3 if your cluster
+  # has the EBS CSI driver and a gp3 StorageClass configured.
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 1Gi

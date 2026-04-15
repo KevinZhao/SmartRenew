@@ -1,0 +1,23 @@
+{
+  "accounts": [
+    {
+      "alias": "prod-gpu",
+      "account_id": "123456789012",
+      "access_key": "AKIA_REPLACE_ME",
+      "secret_key": "REPLACE_ME",
+      "regions": ["us-east-1", "us-west-2"]
+    }
+  ],
+  "notifiers": [
+    {
+      "enabled": true,
+      "type": "lark",
+      "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_HOOK_ID"
+    }
+  ],
+  "remind_days": [30, 14, 7, 3, 1],
+  "sync_interval": "6h",
+  "alert_interval": "1h",
+  "listen_addr": ":5000",
+  "db_path": "/data/smartrenew.db"
+}
