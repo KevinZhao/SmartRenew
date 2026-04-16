@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"smartrenew/config"
-	"smartrenew/handler"
-	"smartrenew/notifier"
-	"smartrenew/scheduler"
-	"smartrenew/store"
+	"github.com/KevinZhao/SmartRenew/config"
+	"github.com/KevinZhao/SmartRenew/handler"
+	"github.com/KevinZhao/SmartRenew/notifier"
+	"github.com/KevinZhao/SmartRenew/scheduler"
+	"github.com/KevinZhao/SmartRenew/store"
 )
 
 //go:embed frontend

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"smartrenew/model"
+	"github.com/KevinZhao/SmartRenew/model"
 )
 
 type LarkNotifier struct {

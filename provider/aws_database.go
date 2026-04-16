@@ -13,8 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/redshift"
 
-	"smartrenew/config"
-	"smartrenew/model"
+	"github.com/KevinZhao/SmartRenew/config"
+	"github.com/KevinZhao/SmartRenew/model"
 )
 
 func fetchRDSReservedInstances(ctx context.Context, cfg aws.Config, acct config.Account, region string) ([]model.Reservation, error) {

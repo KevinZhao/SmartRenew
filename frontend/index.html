@@ -55,7 +55,6 @@
         <div class="tabs">
             <button class="tab" :class="{active: activeTab==='dashboard'}" @click="activeTab='dashboard'">Dashboard</button>
             <button class="tab" :class="{active: activeTab==='alerts'}" @click="activeTab='alerts'; loadAlerts()">Alerts</button>
-            <button class="tab" :class="{active: activeTab==='accounts'}" @click="activeTab='accounts'; loadAccounts()">Accounts</button>
         </div>
 
         <!-- Dashboard -->
@@ -66,7 +65,13 @@
                     <option value="sp">Savings Plans</option>
                     <option value="cb">Capacity Blocks</option>
                     <option value="odcr">ODCR</option>
-                    <option value="ri">Reserved Instances</option>
+                    <option value="ri">EC2 Reserved Instances</option>
+                    <option value="rds_ri">RDS Reserved Instances</option>
+                    <option value="cache_ri">ElastiCache Reserved Nodes</option>
+                    <option value="redshift_ri">Redshift Reserved Nodes</option>
+                    <option value="opensearch_ri">OpenSearch Reserved Instances</option>
+                    <option value="memorydb_ri">MemoryDB Reserved Nodes</option>
+                    <option value="bedrock_pt">Bedrock Provisioned Throughput</option>
                 </select>
                 <select v-model="filterAccount">
                     <option value="">All Accounts</option>
@@ -137,54 +142,6 @@
             </div>
         </div>
 
-        <!-- Accounts -->
-        <div v-if="activeTab==='accounts'">
-            <div class="filter-bar">
-                <input type="text" v-model="accountSearch" placeholder="Search account name, ID, email, tag...">
-            </div>
-            <div class="table-wrap">
-                <div v-if="accountsLoading" class="loading">Loading...</div>
-                <table v-else-if="filteredAccounts.length">
-                    <thead>
-                        <tr>
-                            <th>Account Name</th>
-                            <th>Account ID</th>
-                            <th>Email</th>
-                            <th>Status</th>
-                            <th>Joined</th>
-                            <th>Joined At</th>
-                            <th>Tag</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr v-for="a in filteredAccounts" :key="a.account_id">
-                            <td>{{ a.account_name }}</td>
-                            <td style="font-family:monospace">{{ a.account_id }}</td>
-                            <td>{{ a.email }}</td>
-                            <td>
-                                <span :class="a.status === 'ACTIVE' ? 'badge badge-normal' : 'badge badge-critical'">{{ a.status }}</span>
-                            </td>
-                            <td>{{ a.joined_method }}</td>
-                            <td>{{ formatDate(a.joined_at) }}</td>
-                            <td>
-                                <span v-if="editingAccountId !== a.account_id" @click="startEditTag(a)" style="cursor:pointer;min-width:80px;display:inline-block">
-                                    {{ a.tag || '—' }}
-                                </span>
-                                <input v-else type="text" v-model="editingTag" @keyup.enter="saveTag(a)" @keyup.escape="cancelEditTag" class="tag-input" ref="tagInput">
-                            </td>
-                            <td>
-                                <button v-if="editingAccountId === a.account_id" class="btn btn-primary btn-sm" @click="saveTag(a)">Save</button>
-                                <button v-if="editingAccountId === a.account_id" class="btn btn-outline btn-sm" @click="cancelEditTag" style="margin-left:4px">Cancel</button>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div v-else class="empty">
-                    <div>No accounts. Click "Sync AWS" to fetch organization accounts.</div>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 <script src="/static/js/app.js"></script>

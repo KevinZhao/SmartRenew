@@ -2,15 +2,14 @@ package scheduler
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
-	"smartrenew/config"
-	"smartrenew/model"
-	"smartrenew/notifier"
-	"smartrenew/provider"
-	"smartrenew/store"
+	"github.com/KevinZhao/SmartRenew/config"
+	"github.com/KevinZhao/SmartRenew/model"
+	"github.com/KevinZhao/SmartRenew/notifier"
+	"github.com/KevinZhao/SmartRenew/provider"
+	"github.com/KevinZhao/SmartRenew/store"
 )
 
 type Scheduler struct {
@@ -29,37 +28,7 @@ func (sc *Scheduler) SyncAll(ctx context.Context) (int, []error) {
 	var allErrors []error
 	total := 0
 
-	// Sync organization accounts
-	orgAccounts, err := provider.FetchOrgAccounts(ctx, sc.cfg.Accounts)
-	if err != nil {
-		allErrors = append(allErrors, fmt.Errorf("org accounts: %w", err))
-	} else {
-		for _, a := range orgAccounts {
-			if err := sc.store.UpsertOrgAccount(a); err != nil {
-				allErrors = append(allErrors, fmt.Errorf("upsert org account %s: %w", a.AccountID, err))
-			}
-		}
-		slog.Info("org accounts synced", "count", len(orgAccounts))
-	}
-
 	for _, acct := range sc.cfg.Accounts {
-		// If this is an org payer, expand and sync member accounts
-		if acct.OrgRoleName != "" {
-			// Build set of directly-configured account IDs to avoid double-sync
-			directIDs := make(map[string]bool, len(sc.cfg.Accounts))
-			for _, a := range sc.cfg.Accounts {
-				directIDs[a.AccountID] = true
-			}
-			memberAccounts, expandErrs := provider.ExpandOrgAccounts(ctx, acct, directIDs)
-			allErrors = append(allErrors, expandErrs...)
-			for _, member := range memberAccounts {
-				n, errs := syncOneAccount(ctx, sc.store, member)
-				total += n
-				allErrors = append(allErrors, errs...)
-			}
-		}
-
-		// Always sync the configured account itself (payer or regular)
 		items, errs := provider.SyncAccount(ctx, acct)
 		allErrors = append(allErrors, errs...)
 
@@ -135,6 +104,7 @@ func (sc *Scheduler) CheckAndNotify() {
 }
 
 // StartCron starts periodic sync and notification checks.
+// Triggers an immediate sync on startup, then runs on intervals.
 func (sc *Scheduler) StartCron(ctx context.Context) {
 	syncInterval := sc.cfg.ParseSyncInterval()
 	alertInterval := sc.cfg.ParseAlertInterval()
@@ -142,6 +112,15 @@ func (sc *Scheduler) StartCron(ctx context.Context) {
 	alertTicker := time.NewTicker(alertInterval)
 
 	go func() {
+		// Immediate first sync on startup
+		slog.Info("running initial sync")
+		total, errs := sc.SyncAll(ctx)
+		slog.Info("initial sync done", "items", total, "errors", len(errs))
+		for _, e := range errs {
+			slog.Error("sync error", "err", e)
+		}
+		sc.CheckAndNotify()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -162,23 +141,4 @@ func (sc *Scheduler) StartCron(ctx context.Context) {
 	}()
 
 	slog.Info("cron started", "sync_interval", syncInterval, "alert_interval", alertInterval)
-}
-
-// syncOneAccount syncs a single account: fetch, delete old data, upsert new.
-func syncOneAccount(ctx context.Context, st *store.Store, acct config.Account) (int, []error) {
-	items, errs := provider.SyncAccount(ctx, acct)
-	if len(items) > 0 {
-		if err := st.DeleteByAccountID(acct.AccountID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	count := 0
-	for _, item := range items {
-		if err := st.Upsert(item); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		count++
-	}
-	return count, errs
 }

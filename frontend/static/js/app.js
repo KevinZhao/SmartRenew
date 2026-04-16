@@ -5,17 +5,12 @@ createApp({
         const activeTab = ref('dashboard');
         const reservations = ref([]);
         const alerts = ref([]);
-        const accounts = ref([]);
         const loading = ref(false);
-        const accountsLoading = ref(false);
         const filterType = ref('');
         const filterAccount = ref('');
         const searchText = ref('');
-        const accountSearch = ref('');
         const message = ref('');
         const messageErr = ref(false);
-        const editingAccountId = ref(null);
-        const editingTag = ref('');
 
         function showMsg(text, isErr = false) {
             message.value = text;
@@ -50,44 +45,6 @@ createApp({
             } catch (e) {
                 showMsg('Load alerts failed: ' + e.message, true);
                 alerts.value = [];
-            }
-        }
-
-        async function loadAccounts() {
-            accountsLoading.value = true;
-            try {
-                accounts.value = await apiFetch('/api/accounts');
-            } catch (e) {
-                showMsg('Load accounts failed: ' + e.message, true);
-                accounts.value = [];
-            } finally {
-                accountsLoading.value = false;
-            }
-        }
-
-        function startEditTag(account) {
-            editingAccountId.value = account.account_id;
-            editingTag.value = account.tag || '';
-        }
-
-        function cancelEditTag() {
-            editingAccountId.value = null;
-            editingTag.value = '';
-        }
-
-        async function saveTag(account) {
-            try {
-                await apiFetch('/api/accounts/tag', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ account_id: account.account_id, tag: editingTag.value })
-                });
-                account.tag = editingTag.value;
-                editingAccountId.value = null;
-                editingTag.value = '';
-                showMsg('Tag updated');
-            } catch (e) {
-                showMsg('Update tag failed: ' + e.message, true);
             }
         }
 
@@ -169,17 +126,6 @@ createApp({
             });
         });
 
-        const filteredAccounts = computed(() => {
-            return (accounts.value || []).filter(a => {
-                if (!accountSearch.value) return true;
-                const s = accountSearch.value.toLowerCase();
-                return (a.account_name || '').toLowerCase().includes(s)
-                    || (a.account_id || '').toLowerCase().includes(s)
-                    || (a.email || '').toLowerCase().includes(s)
-                    || (a.tag || '').toLowerCase().includes(s);
-            });
-        });
-
         function formatDate(d) {
             if (!d) return '-';
             try { return new Date(d).toLocaleDateString('zh-CN'); } catch { return d; }
@@ -219,13 +165,12 @@ createApp({
         });
 
         return {
-            activeTab, reservations, alerts, accounts, loading, accountsLoading,
-            filterType, filterAccount, searchText, accountSearch,
+            activeTab, reservations, alerts, loading,
+            filterType, filterAccount, searchText,
             message, messageErr,
-            editingAccountId, editingTag,
-            filteredReservations, filteredAccounts, stats, uniqueAccounts,
+            filteredReservations, stats, uniqueAccounts,
             syncData, exportCSV, importFile,
-            loadAlerts, loadAccounts, startEditTag, cancelEditTag, saveTag,
+            loadAlerts,
             formatDate, daysUntil, daysClass, daysDisplay,
             levelColor, levelText,
         };

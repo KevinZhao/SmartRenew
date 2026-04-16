@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/KevinZhao/SmartRenew/model"
 	_ "github.com/mattn/go-sqlite3"
-	"smartrenew/model"
 )
 
 type Store struct {
@@ -55,16 +55,6 @@ func (s *Store) migrate() error {
 			level TEXT NOT NULL,
 			notified_at TEXT DEFAULT (datetime('now')),
 			UNIQUE(reservation_id, level)
-		);
-		CREATE TABLE IF NOT EXISTS org_accounts (
-			account_id TEXT PRIMARY KEY,
-			account_name TEXT NOT NULL DEFAULT '',
-			email TEXT DEFAULT '',
-			status TEXT DEFAULT '',
-			joined_method TEXT DEFAULT '',
-			joined_at TEXT DEFAULT '',
-			tag TEXT DEFAULT '',
-			updated_at TEXT DEFAULT (datetime('now'))
 		);
 	`)
 	return err
@@ -132,12 +122,6 @@ func (s *Store) HasNotified(reservationID string, level model.AlertLevel) (bool,
 	err := s.db.QueryRow("SELECT COUNT(*) FROM notify_log WHERE reservation_id = ? AND level = ?",
 		reservationID, string(level)).Scan(&count)
 	return count > 0, err
-}
-
-func (s *Store) MarkNotified(reservationID string, level model.AlertLevel) error {
-	_, err := s.db.Exec("INSERT OR IGNORE INTO notify_log (reservation_id, level) VALUES (?, ?)",
-		reservationID, string(level))
-	return err
 }
 
 // MarkNotifiedBatch marks multiple alerts as notified in a single transaction.
@@ -214,57 +198,4 @@ func (s *Store) Ping() error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
-}
-
-// UpsertOrgAccount inserts or updates an org account, preserving the existing tag.
-func (s *Store) UpsertOrgAccount(a model.OrgAccount) error {
-	_, err := s.db.Exec(`
-		INSERT INTO org_accounts (account_id, account_name, email, status, joined_method, joined_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-		ON CONFLICT(account_id) DO UPDATE SET
-			account_name=excluded.account_name, email=excluded.email,
-			status=excluded.status, joined_method=excluded.joined_method,
-			joined_at=excluded.joined_at, updated_at=datetime('now')`,
-		a.AccountID, a.AccountName, a.Email, a.Status, a.JoinedMethod,
-		a.JoinedAt.Format(time.RFC3339))
-	return err
-}
-
-// ListOrgAccounts returns all org accounts.
-func (s *Store) ListOrgAccounts() ([]model.OrgAccount, error) {
-	rows, err := s.db.Query(`SELECT account_id, account_name, email, status, joined_method, joined_at, tag, updated_at FROM org_accounts ORDER BY account_name ASC`)
-	if err != nil {
-		return nil, fmt.Errorf("query org_accounts: %w", err)
-	}
-	defer rows.Close()
-
-	var results []model.OrgAccount
-	for rows.Next() {
-		var a model.OrgAccount
-		var joinedStr, updatedStr string
-		if err := rows.Scan(&a.AccountID, &a.AccountName, &a.Email, &a.Status, &a.JoinedMethod, &joinedStr, &a.Tag, &updatedStr); err != nil {
-			return nil, fmt.Errorf("scan org_account: %w", err)
-		}
-		if t, err := time.Parse(time.RFC3339, joinedStr); err == nil {
-			a.JoinedAt = t
-		}
-		if t, err := time.Parse(time.RFC3339, updatedStr); err == nil {
-			a.UpdatedAt = t
-		}
-		results = append(results, a)
-	}
-	return results, rows.Err()
-}
-
-// UpdateOrgAccountTag updates the tag for a specific org account.
-func (s *Store) UpdateOrgAccountTag(accountID, tag string) error {
-	res, err := s.db.Exec(`UPDATE org_accounts SET tag = ?, updated_at = datetime('now') WHERE account_id = ?`, tag, accountID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("account %s not found", accountID)
-	}
-	return nil
 }

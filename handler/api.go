@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
-	"smartrenew/config"
-	"smartrenew/csvutil"
-	"smartrenew/model"
+	"github.com/KevinZhao/SmartRenew/config"
+	"github.com/KevinZhao/SmartRenew/csvutil"
+	"github.com/KevinZhao/SmartRenew/model"
 )
 
 // ReservationStore is the subset of store operations the handler needs.
@@ -19,8 +19,6 @@ type ReservationStore interface {
 	List(typeFilter, accountFilter string) ([]model.Reservation, error)
 	GetAlerts(maxDays int) ([]model.Alert, error)
 	Upsert(r model.Reservation) error
-	ListOrgAccounts() ([]model.OrgAccount, error)
-	UpdateOrgAccountTag(accountID, tag string) error
 	Ping() error
 }
 
@@ -53,8 +51,6 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("POST /api/sync", h.syncAll)
 	h.mux.HandleFunc("GET /api/export", h.exportCSV)
 	h.mux.HandleFunc("POST /api/import", h.importCSV)
-	h.mux.HandleFunc("GET /api/accounts", h.listAccounts)
-	h.mux.HandleFunc("PUT /api/accounts/tag", h.updateAccountTag)
 	h.mux.HandleFunc("GET /api/health", h.healthCheck)
 	h.mux.Handle("/", http.FileServer(http.FS(h.frontend)))
 }
@@ -161,35 +157,6 @@ func (h *Handler) importCSV(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) healthCheck(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Ping(); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
-	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-func (h *Handler) listAccounts(w http.ResponseWriter, r *http.Request) {
-	accounts, err := h.store.ListOrgAccounts()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, accounts)
-}
-
-func (h *Handler) updateAccountTag(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AccountID string `json:"account_id"`
-		Tag       string `json:"tag"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.AccountID == "" {
-		writeError(w, http.StatusBadRequest, "account_id is required")
-		return
-	}
-	if err := h.store.UpdateOrgAccountTag(req.AccountID, req.Tag); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})

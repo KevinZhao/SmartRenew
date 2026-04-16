@@ -20,16 +20,12 @@ github.com/aws/aws-sdk-go-v2/service/memorydb v1.33.14 h1:atSeF993yL9rZlW2TCY1j+
 github.com/aws/aws-sdk-go-v2/service/memorydb v1.33.14/go.mod h1:JsgwG5DIIADVhUUlwK8IYDnlXBzTUAyjh7RGgHzsCPk=
 github.com/aws/aws-sdk-go-v2/service/opensearch v1.64.0 h1:69w0lmh+ZflHCUWV0IeRjjZWvxfTOwWnU9+iutSVEsE=
 github.com/aws/aws-sdk-go-v2/service/opensearch v1.64.0/go.mod h1:hkskP/HNQw7dBdPw5LqaBI/zHEz1cADEvYN4DojTT4M=
-github.com/aws/aws-sdk-go-v2/service/organizations v1.51.1 h1:5hM1jQjIzEiu07ZqQ8iI4sC+06C8a+idNtytO65dhAw=
-github.com/aws/aws-sdk-go-v2/service/organizations v1.51.1/go.mod h1:urLFj1twuR/h5T0wN/2/kmY1gxBFa1tTKr+c60lZ2fA=
 github.com/aws/aws-sdk-go-v2/service/rds v1.117.1 h1:LwcVYTKHBsQPhD0evNWtHIH8+xQG62kQaXmWJbLd7jg=
 github.com/aws/aws-sdk-go-v2/service/rds v1.117.1/go.mod h1:EbQarE9odk5+EEhP2Yr6NjDEhms3PU3k9/qZ2GRpOuc=
 github.com/aws/aws-sdk-go-v2/service/redshift v1.62.5 h1:a3aPxz0C4Jdx2eqxS/gfMgDjRS0sYX0B/R/pTtaG4D8=
 github.com/aws/aws-sdk-go-v2/service/redshift v1.62.5/go.mod h1:q7lMcIBVEnJiYM+oBmsMp92fang3kCz4/vRi6IjGWjE=
 github.com/aws/aws-sdk-go-v2/service/savingsplans v1.32.2 h1:T2App0USOLTMrNrAPzv1fHMPiyRLYdRRpY9DyvxRZuI=
 github.com/aws/aws-sdk-go-v2/service/savingsplans v1.32.2/go.mod h1:rGN7FVkWkWD882JDg+YkAo8yiLGUBGek6ps1FG3cg7w=
-github.com/aws/aws-sdk-go-v2/service/sts v1.41.10 h1:p8ogvvLugcR/zLBXTXrTkj0RYBUdErbMnAFFp12Lm/U=
-github.com/aws/aws-sdk-go-v2/service/sts v1.41.10/go.mod h1:60dv0eZJfeVXfbT1tFJinbHrDfSJ2GZl4Q//OSSNAVw=
 github.com/aws/smithy-go v1.24.2 h1:FzA3bu/nt/vDvmnkg+R8Xl46gmzEDam6mZ1hzmwXFng=
 github.com/aws/smithy-go v1.24.2/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
 github.com/mattn/go-sqlite3 v1.14.42 h1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=

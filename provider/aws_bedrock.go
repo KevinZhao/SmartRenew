@@ -7,8 +7,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrock"
 
-	"smartrenew/config"
-	"smartrenew/model"
+	"github.com/KevinZhao/SmartRenew/config"
+	"github.com/KevinZhao/SmartRenew/model"
 )
 
 func fetchBedrockProvisionedThroughputs(ctx context.Context, cfg aws.Config, acct config.Account, region string) ([]model.Reservation, error) {

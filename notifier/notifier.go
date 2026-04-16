@@ -1,6 +1,6 @@
 package notifier
 
-import "smartrenew/model"
+import "github.com/KevinZhao/SmartRenew/model"
 
 // Notifier is the abstraction for all notification channels.
 type Notifier interface {

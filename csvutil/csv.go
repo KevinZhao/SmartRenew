@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"smartrenew/model"
+	"github.com/KevinZhao/SmartRenew/model"
 )
 
 var headers = []string{

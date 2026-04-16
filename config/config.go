@@ -11,13 +11,11 @@ import (
 )
 
 type Account struct {
-	Alias        string   `json:"alias"`
-	AccountID    string   `json:"account_id"`
-	AccessKey    string   `json:"access_key"`
-	SecretKey    string   `json:"secret_key"`
-	Regions      []string `json:"regions"`
-	OrgRoleName  string   `json:"org_role_name,omitempty"`
-	SessionToken string   `json:"-"` // runtime-only: populated by STS AssumeRole
+	Alias     string   `json:"alias"`
+	AccountID string   `json:"account_id"`
+	AccessKey string   `json:"access_key"`
+	SecretKey string   `json:"secret_key"`
+	Regions   []string `json:"regions"`
 }
 
 type NotifyConfig struct {

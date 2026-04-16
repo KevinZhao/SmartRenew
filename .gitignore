@@ -9,3 +9,4 @@ node_modules/
 test-results/
 e2e-*.png
 .claude/
+SANITIZATION_REPORT.md

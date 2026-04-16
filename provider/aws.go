@@ -12,14 +12,14 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/savingsplans"
 
-	"smartrenew/config"
-	"smartrenew/model"
+	"github.com/KevinZhao/SmartRenew/config"
+	"github.com/KevinZhao/SmartRenew/model"
 )
 
 func buildAWSConfig(acct config.Account, region string) aws.Config {
 	return aws.Config{
 		Region:      region,
-		Credentials: credentials.NewStaticCredentialsProvider(acct.AccessKey, acct.SecretKey, acct.SessionToken),
+		Credentials: credentials.NewStaticCredentialsProvider(acct.AccessKey, acct.SecretKey, ""),
 	}
 }
 
