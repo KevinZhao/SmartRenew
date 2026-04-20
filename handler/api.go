@@ -19,6 +19,7 @@ type ReservationStore interface {
 	List(typeFilter, accountFilter string) ([]model.Reservation, error)
 	GetAlerts(maxDays int) ([]model.Alert, error)
 	Upsert(r model.Reservation) error
+	ListGPUCoverage(accountFilter string) ([]model.GPUCoverage, error)
 	Ping() error
 }
 
@@ -52,6 +53,7 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/export", h.exportCSV)
 	h.mux.HandleFunc("POST /api/import", h.importCSV)
 	h.mux.HandleFunc("GET /api/health", h.healthCheck)
+	h.mux.HandleFunc("GET /api/gpu-coverage", h.listGPUCoverage)
 	h.mux.Handle("/", http.FileServer(http.FS(h.frontend)))
 }
 
@@ -160,6 +162,16 @@ func (h *Handler) healthCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) listGPUCoverage(w http.ResponseWriter, r *http.Request) {
+	accountFilter := r.URL.Query().Get("account")
+	rows, err := h.store.ListGPUCoverage(accountFilter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, rows)
 }
 
 func writeJSON(w http.ResponseWriter, data any) {

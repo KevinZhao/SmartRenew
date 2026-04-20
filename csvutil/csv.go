@@ -14,7 +14,7 @@ import (
 
 var headers = []string{
 	"account_alias", "account_id", "region", "type", "resource_id",
-	"instance_type", "platform", "quantity", "start_time", "end_time",
+	"instance_type", "platform", "quantity", "used_count", "start_time", "end_time",
 	"status", "description",
 }
 
@@ -27,7 +27,7 @@ func Export(w io.Writer, rows []model.Reservation) error {
 	for _, r := range rows {
 		record := []string{
 			r.AccountAlias, r.AccountID, r.Region, string(r.Type), r.ResourceID,
-			r.InstanceType, r.Platform, strconv.Itoa(r.Quantity),
+			r.InstanceType, r.Platform, strconv.Itoa(r.Quantity), strconv.Itoa(r.UsedCount),
 			r.StartTime.Format(time.RFC3339), r.EndTime.Format(time.RFC3339),
 			r.Status, r.Description,
 		}
@@ -71,9 +71,23 @@ func Import(r io.Reader) ([]model.Reservation, error) {
 		r.ID = fmt.Sprintf("%s_%s_%s", r.AccountID, r.Region, r.ResourceID)
 
 		if q := getCol(row, colMap, "quantity"); q != "" {
-			r.Quantity, _ = strconv.Atoi(q)
+			n, err := strconv.Atoi(q)
+			if err != nil {
+				slog.Warn("parse quantity in csv", "row", i+2, "value", q, "err", err)
+				r.Quantity = 1
+			} else {
+				r.Quantity = n
+			}
 		} else {
 			r.Quantity = 1
+		}
+		if q := getCol(row, colMap, "used_count"); q != "" {
+			n, err := strconv.Atoi(q)
+			if err != nil {
+				slog.Warn("parse used_count in csv", "row", i+2, "value", q, "err", err)
+			} else {
+				r.UsedCount = n
+			}
 		}
 		if s := getCol(row, colMap, "start_time"); s != "" {
 			if t, err := time.Parse(time.RFC3339, s); err == nil {

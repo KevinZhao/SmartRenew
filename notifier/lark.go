@@ -30,11 +30,20 @@ func (l *LarkNotifier) Send(alerts []model.Alert) error {
 	if len(alerts) == 0 {
 		return nil
 	}
+	return l.postCard(buildLarkContent(alerts))
+}
 
-	content := buildLarkContent(alerts)
+func (l *LarkNotifier) SendGPUAlerts(items []model.GPUCoverage) error {
+	if len(items) == 0 {
+		return nil
+	}
+	return l.postCard(buildGPUAlertContent(items))
+}
+
+func (l *LarkNotifier) postCard(card map[string]any) error {
 	payload := map[string]any{
 		"msg_type": "interactive",
-		"card":     content,
+		"card":     card,
 	}
 
 	body, err := json.Marshal(payload)
@@ -51,16 +60,14 @@ func (l *LarkNotifier) Send(alerts []model.Alert) error {
 		resp.Body.Close()
 	}()
 
-	// Check HTTP status first (proxy errors return non-JSON bodies)
 	var result struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 	}
 	if resp.StatusCode != http.StatusOK {
-		_ = json.NewDecoder(resp.Body).Decode(&result) // best-effort
+		_ = json.NewDecoder(resp.Body).Decode(&result)
 		return fmt.Errorf("lark HTTP %d: %s", resp.StatusCode, result.Msg)
 	}
-	// Lark returns 200 even for app-level errors; check the JSON body
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("lark response decode: %w", err)
 	}
@@ -133,4 +140,30 @@ func formatAlertLine(a model.Alert) string {
 		a.ResourceID,
 		a.Region,
 	)
+}
+
+func buildGPUAlertContent(items []model.GPUCoverage) map[string]any {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("**GPU On-Demand Alert** - %d GPU instances running without coverage\n", len(items)))
+
+	for _, g := range items {
+		lines = append(lines, fmt.Sprintf("- **%s** | %s | %s | %s/%s",
+			g.InstanceType, g.InstanceID, g.AccountAlias, g.Region, g.AZ))
+	}
+
+	return map[string]any{
+		"header": map[string]any{
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": "SmartRenew GPU On-Demand Alert",
+			},
+			"template": "red",
+		},
+		"elements": []map[string]any{
+			{
+				"tag":     "markdown",
+				"content": strings.Join(lines, "\n"),
+			},
+		},
+	}
 }

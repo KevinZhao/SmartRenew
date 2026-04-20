@@ -23,7 +23,9 @@ func New(cfg *config.Config, s *store.Store, notifiers []notifier.Notifier) *Sch
 }
 
 // SyncAll fetches data from all accounts and upserts into store.
-// Uses delete-then-repopulate per account to purge resources removed from AWS.
+// Safe mode: on partial failure (any region/type error), skips the per-account
+// purge step so existing rows are preserved. A fully successful account fetch
+// triggers delete-and-repopulate to drop rows that no longer exist in AWS.
 func (sc *Scheduler) SyncAll(ctx context.Context) (int, []error) {
 	var allErrors []error
 	total := 0
@@ -32,11 +34,13 @@ func (sc *Scheduler) SyncAll(ctx context.Context) (int, []error) {
 		items, errs := provider.SyncAccount(ctx, acct)
 		allErrors = append(allErrors, errs...)
 
-		// Only purge old data if we got at least some results (avoid wiping on total API failure)
-		if len(items) > 0 {
+		if len(errs) == 0 && len(items) > 0 {
 			if err := sc.store.DeleteByAccountID(acct.AccountID); err != nil {
 				allErrors = append(allErrors, err)
 			}
+		} else if len(errs) > 0 {
+			slog.Warn("partial sync failure, skipping delete to preserve existing rows",
+				"account", acct.Alias, "errors", len(errs))
 		}
 
 		for _, item := range items {
@@ -45,6 +49,30 @@ func (sc *Scheduler) SyncAll(ctx context.Context) (int, []error) {
 				continue
 			}
 			total++
+		}
+
+		// GPU coverage check — same preservation rule.
+		gpuItems, gpuErrs := provider.CheckGPUCoverage(ctx, acct)
+		allErrors = append(allErrors, gpuErrs...)
+		if len(gpuItems) > 0 {
+			if len(gpuErrs) == 0 {
+				if err := sc.store.DeleteGPUCoverageByAccountID(acct.AccountID); err != nil {
+					allErrors = append(allErrors, err)
+				}
+			} else {
+				slog.Warn("partial gpu sync failure, skipping delete to preserve existing rows",
+					"account", acct.Alias, "errors", len(gpuErrs))
+			}
+			odCount := 0
+			for _, g := range gpuItems {
+				if g.Coverage == model.CoverageOnDemand {
+					odCount++
+				}
+				if err := sc.store.UpsertGPUCoverage(g); err != nil {
+					allErrors = append(allErrors, err)
+				}
+			}
+			slog.Info("gpu coverage check done", "account", acct.Alias, "gpu_instances", len(gpuItems), "on_demand", odCount)
 		}
 	}
 	return total, allErrors
@@ -103,6 +131,63 @@ func (sc *Scheduler) CheckAndNotify() {
 	}
 }
 
+func (sc *Scheduler) CheckGPUODAndNotify() {
+	if len(sc.notifiers) == 0 {
+		return
+	}
+
+	allGPU, err := sc.store.ListGPUCoverage("")
+	if err != nil {
+		slog.Error("list gpu coverage failed", "err", err)
+		return
+	}
+
+	var odItems []model.GPUCoverage
+	for _, g := range allGPU {
+		if g.Coverage != model.CoverageOnDemand {
+			continue
+		}
+		notified, err := sc.store.HasNotified(g.ID, model.LevelGPUOnDemand)
+		if err != nil {
+			slog.Error("check gpu notify log failed", "id", g.ID, "err", err)
+			continue
+		}
+		if !notified {
+			odItems = append(odItems, g)
+		}
+	}
+
+	if len(odItems) == 0 {
+		return
+	}
+
+	anySent := false
+	for _, n := range sc.notifiers {
+		if err := n.SendGPUAlerts(odItems); err != nil {
+			slog.Error("gpu alert send failed", "notifier", n.Name(), "err", err)
+		} else {
+			slog.Info("gpu od alerts sent", "notifier", n.Name(), "count", len(odItems))
+			anySent = true
+		}
+	}
+
+	if !anySent {
+		return
+	}
+
+	// Mark as notified using the existing notify_log table
+	var fakeAlerts []model.Alert
+	for _, g := range odItems {
+		fakeAlerts = append(fakeAlerts, model.Alert{
+			Reservation: model.Reservation{ID: g.ID},
+			Level:       model.LevelGPUOnDemand,
+		})
+	}
+	if err := sc.store.MarkNotifiedBatch(fakeAlerts); err != nil {
+		slog.Error("batch mark gpu notified failed", "err", err)
+	}
+}
+
 // StartCron starts periodic sync and notification checks.
 // Triggers an immediate sync on startup, then runs on intervals.
 func (sc *Scheduler) StartCron(ctx context.Context) {
@@ -120,6 +205,7 @@ func (sc *Scheduler) StartCron(ctx context.Context) {
 			slog.Error("sync error", "err", e)
 		}
 		sc.CheckAndNotify()
+		sc.CheckGPUODAndNotify()
 
 		for {
 			select {
@@ -136,6 +222,7 @@ func (sc *Scheduler) StartCron(ctx context.Context) {
 				}
 			case <-alertTicker.C:
 				sc.CheckAndNotify()
+				sc.CheckGPUODAndNotify()
 			}
 		}
 	}()
