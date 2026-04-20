@@ -16,12 +16,30 @@ type Account struct {
 	AccessKey string   `json:"access_key"`
 	SecretKey string   `json:"secret_key"`
 	Regions   []string `json:"regions"`
+	// SkipTypes lists reservation types to skip fetching for this account,
+	// typically used when the IAM principal lacks permissions for a service.
+	// Accepted values: rds_ri, cache_ri, redshift_ri, opensearch_ri, memorydb_ri, bedrock_pt.
+	SkipTypes []string `json:"skip_types"`
+}
+
+// ShouldSkip reports whether the given type identifier is in SkipTypes.
+func (a Account) ShouldSkip(typeID string) bool {
+	for _, t := range a.SkipTypes {
+		if t == typeID {
+			return true
+		}
+	}
+	return false
 }
 
 type NotifyConfig struct {
 	Enabled    bool   `json:"enabled"`
-	Type       string `json:"type"`
-	WebhookURL string `json:"webhook_url"`
+	Type       string `json:"type"`        // "lark" | "sns"
+	WebhookURL string `json:"webhook_url"` // lark only
+	// SNS-specific fields
+	TopicARN     string `json:"topic_arn"`     // SNS topic to publish to
+	Region       string `json:"region"`        // SNS region, e.g. ap-northeast-1
+	AccountAlias string `json:"account_alias"` // which account's AKSK to use when publishing
 }
 
 type Config struct {
@@ -33,6 +51,9 @@ type Config struct {
 	AlertInterval string         `json:"alert_interval"` // e.g. "1h", "15m"
 	ListenAddr    string         `json:"listen_addr"`
 	DBPath        string         `json:"db_path"`
+	// GPUCardCounts overrides built-in instance_type → GPU card count map.
+	// Keys can be full instance_type ("p5.48xlarge") or family ("p5").
+	GPUCardCounts map[string]int `json:"gpu_card_counts"`
 }
 
 func DefaultConfig() *Config {
@@ -101,9 +122,7 @@ func validate(cfg *Config) error {
 		if a.Alias == "" {
 			return fmt.Errorf("account[%d]: alias is required", i)
 		}
-		if a.AccountID == "" {
-			return fmt.Errorf("account[%d] %q: account_id is required", i, a.Alias)
-		}
+		// account_id is optional — will be auto-resolved via STS GetCallerIdentity at startup.
 		if a.AccessKey == "" || a.SecretKey == "" {
 			return fmt.Errorf("account[%d] %q: access_key and secret_key are required", i, a.Alias)
 		}
@@ -112,8 +131,21 @@ func validate(cfg *Config) error {
 		}
 	}
 	for i, n := range cfg.Notifiers {
-		if n.Enabled && n.WebhookURL == "" {
-			return fmt.Errorf("notifier[%d] %q: webhook_url is required when enabled", i, n.Type)
+		if !n.Enabled {
+			continue
+		}
+		switch n.Type {
+		case "lark":
+			if n.WebhookURL == "" {
+				return fmt.Errorf("notifier[%d] lark: webhook_url is required when enabled", i)
+			}
+		case "sns":
+			if n.TopicARN == "" {
+				return fmt.Errorf("notifier[%d] sns: topic_arn is required when enabled", i)
+			}
+			if n.Region == "" {
+				return fmt.Errorf("notifier[%d] sns: region is required when enabled", i)
+			}
 		}
 	}
 	for _, d := range cfg.RemindDays {
@@ -136,13 +168,13 @@ func validate(cfg *Config) error {
 
 // MaxRemindDays returns the largest value in RemindDays.
 func (c *Config) MaxRemindDays() int {
-	max := 30
+	largest := 30
 	for _, d := range c.RemindDays {
-		if d > max {
-			max = d
+		if d > largest {
+			largest = d
 		}
 	}
-	return max
+	return largest
 }
 
 // ParseSyncInterval returns the sync interval as a duration, defaulting to 6h.

@@ -12,9 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+
 	"github.com/KevinZhao/SmartRenew/config"
 	"github.com/KevinZhao/SmartRenew/handler"
 	"github.com/KevinZhao/SmartRenew/notifier"
+	"github.com/KevinZhao/SmartRenew/provider"
 	"github.com/KevinZhao/SmartRenew/scheduler"
 	"github.com/KevinZhao/SmartRenew/store"
 )
@@ -27,6 +31,33 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+
+	// Auto-resolve missing account IDs via STS GetCallerIdentity.
+	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	for i := range cfg.Accounts {
+		a := &cfg.Accounts[i]
+		if a.AccountID != "" || len(a.Regions) == 0 {
+			continue
+		}
+		awsCfg := aws.Config{
+			Region:      a.Regions[0],
+			Credentials: credentials.NewStaticCredentialsProvider(a.AccessKey, a.SecretKey, ""),
+		}
+		id, err := provider.ResolveAccountID(resolveCtx, awsCfg)
+		if err != nil {
+			log.Fatalf("resolve account_id for %q: %v", a.Alias, err)
+		}
+		a.AccountID = id
+		slog.Info("account_id resolved via STS", "alias", a.Alias, "account_id", id)
+	}
+	resolveCancel()
+
+	// Apply GPU card count overrides (config → provider registry).
+	if len(cfg.GPUCardCounts) > 0 {
+		provider.SetGPUCardOverrides(cfg.GPUCardCounts)
+		slog.Info("gpu card count overrides applied", "entries", len(cfg.GPUCardCounts))
+	}
+
 	slog.Info("config loaded", "accounts", len(cfg.Accounts), "listen", cfg.ListenAddr)
 
 	db, err := store.New(cfg.DBPath)
@@ -45,6 +76,17 @@ func main() {
 		case "lark":
 			notifiers = append(notifiers, notifier.NewLark(nc.WebhookURL))
 			slog.Info("notifier enabled", "type", "lark")
+		case "sns":
+			acct := findAccount(cfg.Accounts, nc.AccountAlias)
+			if acct == nil {
+				log.Fatalf("sns notifier: account_alias %q not found in configured accounts", nc.AccountAlias)
+			}
+			awsCfg := aws.Config{
+				Region:      nc.Region,
+				Credentials: credentials.NewStaticCredentialsProvider(acct.AccessKey, acct.SecretKey, ""),
+			}
+			notifiers = append(notifiers, notifier.NewSNS(awsCfg, nc.TopicARN))
+			slog.Info("notifier enabled", "type", "sns", "topic", nc.TopicARN, "region", nc.Region, "via_account", nc.AccountAlias)
 		default:
 			slog.Warn("unknown notifier type, skipped", "type", nc.Type)
 		}
@@ -91,4 +133,13 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("shutdown error", "err", err)
 	}
+}
+
+func findAccount(accounts []config.Account, alias string) *config.Account {
+	for i := range accounts {
+		if accounts[i].Alias == alias {
+			return &accounts[i]
+		}
+	}
+	return nil
 }
