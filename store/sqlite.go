@@ -20,10 +20,13 @@ func New(dbPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, err
 	}
+	// Serialize writers at the driver level — SQLite allows one writer at a time,
+	// and multiple open conns can cause SQLITE_BUSY even with busy_timeout.
+	db.SetMaxOpenConns(1)
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		return nil, err
@@ -43,6 +46,7 @@ func (s *Store) migrate() error {
 			instance_type TEXT DEFAULT '',
 			platform TEXT DEFAULT '',
 			quantity INTEGER DEFAULT 1,
+			used_count INTEGER DEFAULT 0,
 			start_time TEXT,
 			end_time TEXT,
 			status TEXT DEFAULT 'active',
@@ -57,26 +61,52 @@ func (s *Store) migrate() error {
 			UNIQUE(reservation_id, level)
 		);
 	`)
+	if err != nil {
+		return err
+	}
+	// Best-effort column adds for upgrades from older schema; idempotent —
+	// fails with "duplicate column" on subsequent runs, which we intentionally ignore.
+	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN used_count INTEGER DEFAULT 0")
+	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN hourly_rate REAL DEFAULT 0")
+	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN equiv_cores REAL DEFAULT 0")
+
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS gpu_coverage (
+			id TEXT PRIMARY KEY,
+			account_alias TEXT NOT NULL,
+			account_id TEXT NOT NULL,
+			region TEXT NOT NULL,
+			az TEXT DEFAULT '',
+			instance_id TEXT NOT NULL,
+			instance_type TEXT NOT NULL,
+			coverage TEXT NOT NULL,
+			coverage_ref TEXT DEFAULT '',
+			sp_rate REAL DEFAULT 0,
+			updated_at TEXT DEFAULT (datetime('now'))
+		);
+	`)
 	return err
 }
 
 func (s *Store) Upsert(r model.Reservation) error {
 	_, err := s.db.Exec(`
 		INSERT INTO reservations (id, account_alias, account_id, region, type, resource_id,
-			instance_type, platform, quantity, start_time, end_time, status, description, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+			instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status, end_time=excluded.end_time, quantity=excluded.quantity,
-			description=excluded.description, updated_at=datetime('now')`,
+			used_count=excluded.used_count, description=excluded.description,
+			hourly_rate=excluded.hourly_rate, equiv_cores=excluded.equiv_cores,
+			updated_at=datetime('now')`,
 		r.ID, r.AccountAlias, r.AccountID, r.Region, string(r.Type), r.ResourceID,
-		r.InstanceType, r.Platform, r.Quantity,
+		r.InstanceType, r.Platform, r.Quantity, r.UsedCount,
 		r.StartTime.Format(time.RFC3339), r.EndTime.Format(time.RFC3339),
-		r.Status, r.Description)
+		r.Status, r.Description, r.HourlyRate, r.EquivCores)
 	return err
 }
 
 func (s *Store) List(typeFilter, accountFilter string) ([]model.Reservation, error) {
-	query := "SELECT id, account_alias, account_id, region, type, resource_id, instance_type, platform, quantity, start_time, end_time, status, description, updated_at FROM reservations WHERE 1=1"
+	query := "SELECT id, account_alias, account_id, region, type, resource_id, instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at FROM reservations WHERE 1=1"
 	args := []any{}
 	if typeFilter != "" {
 		query += " AND type = ?"
@@ -92,7 +122,7 @@ func (s *Store) List(typeFilter, accountFilter string) ([]model.Reservation, err
 
 func (s *Store) GetAlerts(maxDays int) ([]model.Alert, error) {
 	query := `SELECT id, account_alias, account_id, region, type, resource_id, instance_type,
-		platform, quantity, start_time, end_time, status, description, updated_at
+		platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at
 		FROM reservations
 		WHERE end_time > datetime('now')
 		  AND end_time <= datetime('now', '+' || ? || ' days')
@@ -163,8 +193,8 @@ func (s *Store) queryReservations(query string, args ...any) ([]model.Reservatio
 		var r model.Reservation
 		var typ, startStr, endStr, updatedStr string
 		err := rows.Scan(&r.ID, &r.AccountAlias, &r.AccountID, &r.Region,
-			&typ, &r.ResourceID, &r.InstanceType, &r.Platform, &r.Quantity,
-			&startStr, &endStr, &r.Status, &r.Description, &updatedStr)
+			&typ, &r.ResourceID, &r.InstanceType, &r.Platform, &r.Quantity, &r.UsedCount,
+			&startStr, &endStr, &r.Status, &r.Description, &r.HourlyRate, &r.EquivCores, &updatedStr)
 		if err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
@@ -198,4 +228,57 @@ func (s *Store) Ping() error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func (s *Store) UpsertGPUCoverage(g model.GPUCoverage) error {
+	_, err := s.db.Exec(`
+		INSERT INTO gpu_coverage (id, account_alias, account_id, region, az, instance_id,
+			instance_type, coverage, coverage_ref, sp_rate, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		ON CONFLICT(id) DO UPDATE SET
+			coverage=excluded.coverage, coverage_ref=excluded.coverage_ref,
+			sp_rate=excluded.sp_rate, updated_at=datetime('now')`,
+		g.ID, g.AccountAlias, g.AccountID, g.Region, g.AZ, g.InstanceID,
+		g.InstanceType, string(g.Coverage), g.CoverageRef, g.SPRate)
+	return err
+}
+
+func (s *Store) ListGPUCoverage(accountFilter string) ([]model.GPUCoverage, error) {
+	query := `SELECT id, account_alias, account_id, region, az, instance_id,
+		instance_type, coverage, coverage_ref, sp_rate, updated_at
+		FROM gpu_coverage WHERE 1=1`
+	args := []any{}
+	if accountFilter != "" {
+		query += " AND account_id = ?"
+		args = append(args, accountFilter)
+	}
+	query += " ORDER BY coverage ASC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query gpu_coverage: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.GPUCoverage
+	for rows.Next() {
+		var g model.GPUCoverage
+		var coverage, updatedStr string
+		err := rows.Scan(&g.ID, &g.AccountAlias, &g.AccountID, &g.Region, &g.AZ,
+			&g.InstanceID, &g.InstanceType, &coverage, &g.CoverageRef, &g.SPRate, &updatedStr)
+		if err != nil {
+			return nil, fmt.Errorf("scan gpu_coverage: %w", err)
+		}
+		g.Coverage = model.CoverageType(coverage)
+		if t, err := time.Parse(time.RFC3339, updatedStr); err == nil {
+			g.UpdatedAt = t
+		}
+		results = append(results, g)
+	}
+	return results, rows.Err()
+}
+
+func (s *Store) DeleteGPUCoverageByAccountID(accountID string) error {
+	_, err := s.db.Exec("DELETE FROM gpu_coverage WHERE account_id = ?", accountID)
+	return err
 }

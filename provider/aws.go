@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -62,47 +63,59 @@ func SyncAccount(ctx context.Context, acct config.Account) ([]model.Reservation,
 		}
 
 		// Database RIs
-		rdsItems, err := fetchRDSReservedInstances(ctx, cfg, acct, region)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s/%s/RDS-RI: %w", acct.Alias, region, err))
-		} else {
-			all = append(all, rdsItems...)
+		if !acct.ShouldSkip(string(model.TypeRDSRI)) {
+			rdsItems, err := fetchRDSReservedInstances(ctx, cfg, acct, region)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s/%s/RDS-RI: %w", acct.Alias, region, err))
+			} else {
+				all = append(all, rdsItems...)
+			}
 		}
 
-		cacheItems, err := fetchElastiCacheReservedNodes(ctx, cfg, acct, region)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s/%s/Cache-RI: %w", acct.Alias, region, err))
-		} else {
-			all = append(all, cacheItems...)
+		if !acct.ShouldSkip(string(model.TypeCacheRI)) {
+			cacheItems, err := fetchElastiCacheReservedNodes(ctx, cfg, acct, region)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s/%s/Cache-RI: %w", acct.Alias, region, err))
+			} else {
+				all = append(all, cacheItems...)
+			}
 		}
 
-		redshiftItems, err := fetchRedshiftReservedNodes(ctx, cfg, acct, region)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s/%s/Redshift-RI: %w", acct.Alias, region, err))
-		} else {
-			all = append(all, redshiftItems...)
+		if !acct.ShouldSkip(string(model.TypeRedshiftRI)) {
+			redshiftItems, err := fetchRedshiftReservedNodes(ctx, cfg, acct, region)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s/%s/Redshift-RI: %w", acct.Alias, region, err))
+			} else {
+				all = append(all, redshiftItems...)
+			}
 		}
 
-		osItems, err := fetchOpenSearchReservedInstances(ctx, cfg, acct, region)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s/%s/OpenSearch-RI: %w", acct.Alias, region, err))
-		} else {
-			all = append(all, osItems...)
+		if !acct.ShouldSkip(string(model.TypeOpenSearchRI)) {
+			osItems, err := fetchOpenSearchReservedInstances(ctx, cfg, acct, region)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s/%s/OpenSearch-RI: %w", acct.Alias, region, err))
+			} else {
+				all = append(all, osItems...)
+			}
 		}
 
-		mdbItems, err := fetchMemoryDBReservedNodes(ctx, cfg, acct, region)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s/%s/MemoryDB-RI: %w", acct.Alias, region, err))
-		} else {
-			all = append(all, mdbItems...)
+		if !acct.ShouldSkip(string(model.TypeMemoryDBRI)) {
+			mdbItems, err := fetchMemoryDBReservedNodes(ctx, cfg, acct, region)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s/%s/MemoryDB-RI: %w", acct.Alias, region, err))
+			} else {
+				all = append(all, mdbItems...)
+			}
 		}
 
 		// Bedrock Provisioned Throughput
-		bedrockItems, err := fetchBedrockProvisionedThroughputs(ctx, cfg, acct, region)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s/%s/Bedrock-PT: %w", acct.Alias, region, err))
-		} else {
-			all = append(all, bedrockItems...)
+		if !acct.ShouldSkip(string(model.TypeBedrockPT)) {
+			bedrockItems, err := fetchBedrockProvisionedThroughputs(ctx, cfg, acct, region)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s/%s/Bedrock-PT: %w", acct.Alias, region, err))
+			} else {
+				all = append(all, bedrockItems...)
+			}
 		}
 	}
 
@@ -138,12 +151,33 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 				}
 			}
 
-			// SP is global — use "global" as region
+			spRegion := aws.ToString(sp.Region)
+			if spRegion == "" {
+				spRegion = "global"
+			}
+
+			// Fetch the full rate table for this SP so the UI can show a unit rate.
+			//   GPU family SP  → $/GPU card  (top rate ÷ card count)
+			//   CPU family SP  → $/vCPU      (top rate ÷ vCPU count)
+			//   Compute SP     → $/vCPU from a reference instance (c7i.xlarge, etc.)
+			//                    plus "equivalent cores" = commitment ÷ per-vCPU rate.
+			var rates map[string]float64
+			if string(sp.State) == "active" {
+				r, rErr := fetchSPRates(ctx, cfg, aws.ToString(sp.SavingsPlanId))
+				if rErr != nil {
+					slog.Warn("fetch SP rates failed", "sp_id", aws.ToString(sp.SavingsPlanId), "err", rErr)
+				} else {
+					rates = r
+				}
+			}
+
+			unitRate, equivCores := normalizeSPRate(string(sp.SavingsPlanType), rates, aws.ToString(sp.Commitment))
+
 			results = append(results, model.Reservation{
-				ID:           fmt.Sprintf("%s_global_%s", acct.AccountID, aws.ToString(sp.SavingsPlanId)),
+				ID:           fmt.Sprintf("%s_%s_%s", acct.AccountID, spRegion, aws.ToString(sp.SavingsPlanId)),
 				AccountAlias: acct.Alias,
 				AccountID:    acct.AccountID,
-				Region:       "global",
+				Region:       spRegion,
 				Type:         model.TypeSP,
 				ResourceID:   aws.ToString(sp.SavingsPlanId),
 				InstanceType: aws.ToString(sp.Ec2InstanceFamily),
@@ -153,6 +187,8 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 				EndTime:      endTime,
 				Status:       string(sp.State),
 				Description:  fmt.Sprintf("%s - %s", sp.SavingsPlanType, sp.PaymentOption),
+				HourlyRate:   unitRate,
+				EquivCores:   equivCores,
 			})
 		}
 		nextToken = out.NextToken
@@ -180,6 +216,25 @@ func fetchCapacityReservations(ctx context.Context, cfg aws.Config, acct config.
 			startTime := aws.ToTime(cr.StartDate)
 			endTime := aws.ToTime(cr.EndDate)
 
+			total := int(aws.ToInt32(cr.TotalInstanceCount))
+			available := int(aws.ToInt32(cr.AvailableInstanceCount))
+			used := total - available
+
+			// Future-dated / pending_accept CRs have TotalInstanceCount=0 until activation.
+			// The committed quantity is stored in the AWS-managed tag below.
+			// Such CRs are not yet usable, so used=0 (not total-available=0).
+			if total == 0 {
+				for _, t := range cr.Tags {
+					if aws.ToString(t.Key) == "aws:ec2capacityreservation:incrementalRequestedQuantity" {
+						if n, err := strconv.Atoi(aws.ToString(t.Value)); err == nil && n > 0 {
+							total = n
+							used = 0
+						}
+						break
+					}
+				}
+			}
+
 			r := model.Reservation{
 				ID:           fmt.Sprintf("%s_%s_%s", acct.AccountID, region, aws.ToString(cr.CapacityReservationId)),
 				AccountAlias: acct.Alias,
@@ -188,7 +243,8 @@ func fetchCapacityReservations(ctx context.Context, cfg aws.Config, acct config.
 				ResourceID:   aws.ToString(cr.CapacityReservationId),
 				InstanceType: aws.ToString(cr.InstanceType),
 				Platform:     string(cr.InstancePlatform),
-				Quantity:     int(aws.ToInt32(cr.TotalInstanceCount)),
+				Quantity:     total,
+				UsedCount:    used,
 				StartTime:    startTime,
 				EndTime:      endTime,
 				Status:       string(cr.State),

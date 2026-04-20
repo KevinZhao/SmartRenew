@@ -27,20 +27,31 @@ type Reservation struct {
 	InstanceType string       `json:"instance_type"`
 	Platform     string       `json:"platform"`
 	Quantity     int          `json:"quantity"`
+	UsedCount    int          `json:"used_count"`
 	StartTime    time.Time    `json:"start_time"`
 	EndTime      time.Time    `json:"end_time"`
 	Status       string       `json:"status"`
 	Description  string       `json:"description"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	// HourlyRate is the SP unit $/hr:
+	//   - GPU family SP → $/GPU card
+	//   - CPU family SP → $/vCPU core
+	//   - Compute SP    → $/vCPU core (via reference instance c7i.xlarge or fallbacks)
+	// Not populated for non-SP resources.
+	HourlyRate float64 `json:"hourly_rate"`
+	// EquivCores is the effective vCPU capacity a Compute SP commitment can cover,
+	// computed as commitment ÷ per-vCPU rate. Only populated for Compute SPs.
+	EquivCores float64   `json:"equiv_cores"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type AlertLevel string
 
 const (
-	LevelCritical  AlertLevel = "critical"  // <= 3 days
-	LevelWarning   AlertLevel = "warning"   // <= 7 days
-	LevelAttention AlertLevel = "attention" // <= 14 days
-	LevelNormal    AlertLevel = "normal"    // <= 30 days
+	LevelCritical    AlertLevel = "critical"  // <= 3 days
+	LevelWarning     AlertLevel = "warning"   // <= 7 days
+	LevelAttention   AlertLevel = "attention" // <= 14 days
+	LevelNormal      AlertLevel = "normal"    // <= 30 days
+	LevelGPUOnDemand AlertLevel = "gpu_od"    // GPU running on on-demand pricing
 )
 
 type Alert struct {
