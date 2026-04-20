@@ -45,6 +45,14 @@
                 <div class="label">&gt;30 days</div>
                 <div class="value">{{ stats.active }}</div>
             </div>
+            <div class="stat-card" :class="{'critical': gpuStats.onDemand > 0}">
+                <div class="label">GPU On-Demand</div>
+                <div class="value">{{ gpuStats.onDemand }}</div>
+            </div>
+            <div class="stat-card critical" v-if="stats.idle > 0">
+                <div class="label">Idle ODCR/CB</div>
+                <div class="value">{{ stats.idle }}</div>
+            </div>
             <div class="stat-card">
                 <div class="label">SP / CB / ODCR / RI</div>
                 <div class="value" style="font-size:18px">{{ stats.sp }} / {{ stats.cb }} / {{ stats.odcr }} / {{ stats.ri }}</div>
@@ -55,6 +63,7 @@
         <div class="tabs">
             <button class="tab" :class="{active: activeTab==='dashboard'}" @click="activeTab='dashboard'">Dashboard</button>
             <button class="tab" :class="{active: activeTab==='alerts'}" @click="activeTab='alerts'; loadAlerts()">Alerts</button>
+            <button class="tab" :class="{active: activeTab==='gpu'}" @click="activeTab='gpu'; loadGPUCoverage()">GPU Coverage</button>
         </div>
 
         <!-- Dashboard -->
@@ -84,26 +93,41 @@
                 <table v-else-if="filteredReservations.length">
                     <thead>
                         <tr>
-                            <th>Account</th>
-                            <th>Region</th>
-                            <th>Type</th>
-                            <th>Resource ID</th>
-                            <th>Instance Type</th>
-                            <th>Qty</th>
-                            <th>Start</th>
-                            <th>End</th>
-                            <th>Days Left</th>
-                            <th>Status</th>
+                            <th class="sortable" @click="sortBy('account_alias')">Account <span class="sort-arrow">{{ sortArrow(sortKey, 'account_alias', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('account_id')">Account ID <span class="sort-arrow">{{ sortArrow(sortKey, 'account_id', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('region')">Region <span class="sort-arrow">{{ sortArrow(sortKey, 'region', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('type')">Type <span class="sort-arrow">{{ sortArrow(sortKey, 'type', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('resource_id')">Resource ID <span class="sort-arrow">{{ sortArrow(sortKey, 'resource_id', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('instance_type')">Instance Type <span class="sort-arrow">{{ sortArrow(sortKey, 'instance_type', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('quantity')">Qty <span class="sort-arrow">{{ sortArrow(sortKey, 'quantity', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('hourly_rate')">Unit Rate ($/hr) <span class="sort-arrow">{{ sortArrow(sortKey, 'hourly_rate', sortDir) }}</span></th>
+                            <th>Capacity</th>
+                            <th class="sortable" @click="sortBy('usage')">Usage <span class="sort-arrow">{{ sortArrow(sortKey, 'usage', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('start_time')">Start <span class="sort-arrow">{{ sortArrow(sortKey, 'start_time', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('end_time')">End <span class="sort-arrow">{{ sortArrow(sortKey, 'end_time', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('days_left')">Days Left <span class="sort-arrow">{{ sortArrow(sortKey, 'days_left', sortDir) }}</span></th>
+                            <th class="sortable" @click="sortBy('status')">Status <span class="sort-arrow">{{ sortArrow(sortKey, 'status', sortDir) }}</span></th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr v-for="r in filteredReservations" :key="r.id">
                             <td>{{ r.account_alias }}</td>
+                            <td style="font-family:monospace;font-size:12px">{{ r.account_id }}</td>
                             <td>{{ r.region }}</td>
                             <td><span :class="'badge badge-' + r.type">{{ r.type.toUpperCase() }}</span></td>
                             <td style="font-family:monospace;font-size:12px">{{ r.resource_id }}</td>
                             <td>{{ r.instance_type }}</td>
                             <td>{{ r.quantity }}</td>
+                            <td style="font-family:monospace">{{ r.hourly_rate > 0 ? '$' + r.hourly_rate.toFixed(4) : '-' }}</td>
+                            <td style="font-family:monospace">{{ formatCapacity(r) }}</td>
+                            <td>
+                                <span v-if="r.type === 'odcr' || r.type === 'cb'"
+                                      :class="r.used_count < r.quantity ? 'badge badge-critical' : 'badge badge-normal'">
+                                    {{ r.used_count }}/{{ r.quantity }}
+                                    {{ r.used_count < r.quantity ? 'Idle' : 'In Use' }}
+                                </span>
+                                <span v-else>-</span>
+                            </td>
                             <td>{{ formatDate(r.start_time) }}</td>
                             <td>{{ formatDate(r.end_time) }}</td>
                             <td>
@@ -139,6 +163,55 @@
             </div>
             <div v-else class="empty">
                 <div>No upcoming expirations within 30 days.</div>
+            </div>
+        </div>
+
+        <!-- GPU Coverage -->
+        <div v-if="activeTab==='gpu'">
+            <div class="filter-bar">
+                <select v-model="gpuFilterAccount">
+                    <option value="">All Accounts</option>
+                    <option v-for="a in uniqueAccounts" :value="a.account_id">{{ a.account_alias }} ({{ a.account_id }})</option>
+                </select>
+                <input type="text" v-model="gpuSearchText" placeholder="Search instance ID, type...">
+                <span style="font-size:13px;color:#666">
+                    Total: {{ gpuStats.total }} |
+                    <span style="color:#c62828;font-weight:600">OD: {{ gpuStats.onDemand }}</span> |
+                    SP: {{ gpuStats.sp }} | CB: {{ gpuStats.cb }} | RI: {{ gpuStats.ri }}
+                </span>
+            </div>
+            <div class="table-wrap">
+                <table v-if="filteredGPUCoverage.length">
+                    <thead>
+                        <tr>
+                            <th class="sortable" @click="gpuSortBy('account_alias')">Account <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'account_alias', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('account_id')">Account ID <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'account_id', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('region')">Region <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'region', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('az')">AZ <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'az', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('instance_id')">Instance ID <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'instance_id', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('instance_type')">Instance Type <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'instance_type', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('coverage')">Coverage <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'coverage', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('coverage_ref')">Coverage Ref <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'coverage_ref', gpuSortDir) }}</span></th>
+                            <th class="sortable" @click="gpuSortBy('sp_rate')">SP Rate ($/hr) <span class="sort-arrow">{{ sortArrow(gpuSortKey, 'sp_rate', gpuSortDir) }}</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="g in filteredGPUCoverage" :key="g.id">
+                            <td>{{ g.account_alias }}</td>
+                            <td style="font-family:monospace;font-size:12px">{{ g.account_id }}</td>
+                            <td>{{ g.region }}</td>
+                            <td>{{ g.az }}</td>
+                            <td style="font-family:monospace;font-size:12px">{{ g.instance_id }}</td>
+                            <td>{{ g.instance_type }}</td>
+                            <td><span :class="'badge ' + coverageBadgeClass(g.coverage)">{{ coverageLabel(g.coverage) }}</span></td>
+                            <td style="font-family:monospace;font-size:12px">{{ g.coverage_ref || '-' }}</td>
+                            <td>{{ g.sp_rate > 0 ? '$' + g.sp_rate.toFixed(4) : '-' }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div v-else class="empty">
+                    <div>No GPU instances found. Sync from AWS to detect GPU coverage.</div>
+                </div>
             </div>
         </div>
 

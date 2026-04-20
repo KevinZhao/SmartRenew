@@ -11,6 +11,53 @@ createApp({
         const searchText = ref('');
         const message = ref('');
         const messageErr = ref(false);
+        const gpuCoverage = ref([]);
+        const gpuFilterAccount = ref('');
+        const gpuSearchText = ref('');
+        const sortKey = ref('');
+        const sortDir = ref('asc');
+        const gpuSortKey = ref('');
+        const gpuSortDir = ref('asc');
+
+        function sortBy(key) {
+            if (sortKey.value === key) {
+                sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortKey.value = key;
+                sortDir.value = 'asc';
+            }
+        }
+
+        function gpuSortBy(key) {
+            if (gpuSortKey.value === key) {
+                gpuSortDir.value = gpuSortDir.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                gpuSortKey.value = key;
+                gpuSortDir.value = 'asc';
+            }
+        }
+
+        function sortArrow(current, key, dir) {
+            if (current !== key) return '\u2195';
+            return dir === 'asc' ? '\u2191' : '\u2193';
+        }
+
+        function compareValues(a, b, key) {
+            let va = a[key], vb = b[key];
+            if (key === 'start_time' || key === 'end_time') {
+                va = va && !isZeroTime(va) ? new Date(va).getTime() : -Infinity;
+                vb = vb && !isZeroTime(vb) ? new Date(vb).getTime() : -Infinity;
+            } else if (typeof va === 'number' || typeof vb === 'number') {
+                va = Number(va) || 0;
+                vb = Number(vb) || 0;
+            } else {
+                va = (va == null ? '' : String(va)).toLowerCase();
+                vb = (vb == null ? '' : String(vb)).toLowerCase();
+            }
+            if (va < vb) return -1;
+            if (va > vb) return 1;
+            return 0;
+        }
 
         function showMsg(text, isErr = false) {
             message.value = text;
@@ -48,6 +95,15 @@ createApp({
             }
         }
 
+        async function loadGPUCoverage() {
+            try {
+                gpuCoverage.value = await apiFetch('/api/gpu-coverage');
+            } catch (e) {
+                showMsg('Load GPU coverage failed: ' + e.message, true);
+                gpuCoverage.value = [];
+            }
+        }
+
         async function syncData() {
             showMsg('Syncing from AWS...');
             try {
@@ -56,6 +112,7 @@ createApp({
                 showMsg(`Synced ${data.synced} items` + (errCount ? `, ${errCount} errors` : ''));
                 loadReservations();
                 loadAlerts();
+                loadGPUCoverage();
             } catch (e) {
                 showMsg('Sync failed: ' + e.message, true);
             }
@@ -82,7 +139,7 @@ createApp({
         }
 
         const filteredReservations = computed(() => {
-            return (reservations.value || []).filter(r => {
+            const list = (reservations.value || []).filter(r => {
                 if (filterType.value && r.type !== filterType.value) return false;
                 if (filterAccount.value && r.account_id !== filterAccount.value) return false;
                 if (searchText.value) {
@@ -94,19 +151,39 @@ createApp({
                 }
                 return true;
             });
+            if (!sortKey.value) return list;
+            const key = sortKey.value;
+            const sign = sortDir.value === 'asc' ? 1 : -1;
+            const sorted = list.slice().sort((a, b) => {
+                if (key === 'days_left') {
+                    const da = daysUntil(a.end_time);
+                    const db = daysUntil(b.end_time);
+                    const va = da === null ? Infinity : da;
+                    const vb = db === null ? Infinity : db;
+                    return (va - vb) * sign;
+                }
+                if (key === 'usage') {
+                    const ua = (a.type === 'odcr' || a.type === 'cb') ? (a.used_count || 0) : -1;
+                    const ub = (b.type === 'odcr' || b.type === 'cb') ? (b.used_count || 0) : -1;
+                    return (ua - ub) * sign;
+                }
+                return compareValues(a, b, key) * sign;
+            });
+            return sorted;
         });
 
         const stats = computed(() => {
             const now = new Date();
             const list = reservations.value || [];
             let total = list.length, expired = 0, critical = 0, warning = 0, active = 0;
-            let sp = 0, cb = 0, odcr = 0, ri = 0;
+            let sp = 0, cb = 0, odcr = 0, ri = 0, idle = 0;
             list.forEach(r => {
                 if (r.type === 'sp') sp++;
                 if (r.type === 'cb') cb++;
                 if (r.type === 'odcr') odcr++;
                 if (r.type === 'ri') ri++;
-                if (r.end_time) {
+                if ((r.type === 'odcr' || r.type === 'cb') && r.used_count < r.quantity && r.status === 'active') idle++;
+                if (r.end_time && !isZeroTime(r.end_time)) {
                     const days = (new Date(r.end_time) - now) / 86400000;
                     if (days <= 0) expired++;
                     else if (days <= 7) critical++;
@@ -114,7 +191,7 @@ createApp({
                     else active++;
                 } else { active++; }
             });
-            return { total, expired, critical, warning, active, sp, cb, odcr, ri };
+            return { total, expired, critical, warning, active, sp, cb, odcr, ri, idle };
         });
 
         const uniqueAccounts = computed(() => {
@@ -126,13 +203,18 @@ createApp({
             });
         });
 
+        function isZeroTime(d) {
+            if (!d) return true;
+            return new Date(d).getFullYear() <= 1;
+        }
+
         function formatDate(d) {
-            if (!d) return '-';
+            if (isZeroTime(d)) return '-';
             try { return new Date(d).toLocaleDateString('zh-CN'); } catch { return d; }
         }
 
         function daysUntil(d) {
-            if (!d) return null;
+            if (isZeroTime(d)) return null;
             return Math.ceil((new Date(d) - new Date()) / 86400000);
         }
 
@@ -160,8 +242,67 @@ createApp({
             return map[level] || level;
         }
 
+        const gpuStats = computed(() => {
+            const list = gpuCoverage.value || [];
+            let total = list.length, onDemand = 0, sp = 0, cb = 0, ri = 0;
+            list.forEach(g => {
+                if (g.coverage === 'on_demand') onDemand++;
+                else if (g.coverage === 'savings_plan') sp++;
+                else if (g.coverage === 'capacity_block') cb++;
+                else if (g.coverage === 'reserved_instance') ri++;
+            });
+            return { total, onDemand, sp, cb, ri };
+        });
+
+        const filteredGPUCoverage = computed(() => {
+            const list = (gpuCoverage.value || []).filter(g => {
+                if (gpuFilterAccount.value && g.account_id !== gpuFilterAccount.value) return false;
+                if (gpuSearchText.value) {
+                    const s = gpuSearchText.value.toLowerCase();
+                    return (g.instance_id || '').toLowerCase().includes(s)
+                        || (g.instance_type || '').toLowerCase().includes(s)
+                        || (g.account_alias || '').toLowerCase().includes(s)
+                        || (g.coverage_ref || '').toLowerCase().includes(s);
+                }
+                return true;
+            });
+            if (!gpuSortKey.value) return list;
+            const key = gpuSortKey.value;
+            const sign = gpuSortDir.value === 'asc' ? 1 : -1;
+            return list.slice().sort((a, b) => compareValues(a, b, key) * sign);
+        });
+
+        const gpuFamilyPrefixes = ['p3','p4','p5','p6','g4','g5','g6','g7','inf','trn','dl'];
+        function isGpuFamily(family) {
+            if (!family) return false;
+            const f = family.toLowerCase();
+            return gpuFamilyPrefixes.some(p => f.startsWith(p));
+        }
+        function formatCapacity(r) {
+            if (r.type !== 'sp' || !r.equiv_cores || r.equiv_cores <= 0) return '-';
+            const n = r.equiv_cores;
+            const unit = isGpuFamily(r.instance_type) ? 'cards' : 'cores';
+            // Compute SP is approximate (depends on reference instance choice);
+            // family-scoped SPs are exact.
+            const isCompute = r.platform === 'Compute';
+            const val = n >= 1 ? (isCompute ? Math.round(n) : n.toFixed(n >= 10 ? 0 : 2)) : n.toFixed(2);
+            const prefix = isCompute ? '~' : '';
+            return prefix + val + ' ' + unit;
+        }
+
+        function coverageLabel(coverage) {
+            const map = { on_demand: 'On-Demand', savings_plan: 'Savings Plan', capacity_block: 'Capacity Block', reserved_instance: 'Reserved Instance' };
+            return map[coverage] || coverage;
+        }
+
+        function coverageBadgeClass(coverage) {
+            const map = { on_demand: 'badge-gpu_od', savings_plan: 'badge-gpu_sp', capacity_block: 'badge-gpu_cb', reserved_instance: 'badge-gpu_ri' };
+            return map[coverage] || '';
+        }
+
         onMounted(() => {
             loadReservations();
+            loadGPUCoverage();
         });
 
         return {
@@ -169,10 +310,16 @@ createApp({
             filterType, filterAccount, searchText,
             message, messageErr,
             filteredReservations, stats, uniqueAccounts,
+            gpuCoverage, gpuFilterAccount, gpuSearchText,
+            gpuStats, filteredGPUCoverage,
+            sortKey, sortDir, sortBy,
+            gpuSortKey, gpuSortDir, gpuSortBy,
+            sortArrow,
             syncData, exportCSV, importFile,
-            loadAlerts,
-            formatDate, daysUntil, daysClass, daysDisplay,
+            loadAlerts, loadGPUCoverage,
+            formatCapacity, formatDate, daysUntil, daysClass, daysDisplay,
             levelColor, levelText,
+            coverageLabel, coverageBadgeClass,
         };
     }
 }).mount('#app');
