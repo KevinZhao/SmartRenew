@@ -40,6 +40,7 @@ tr:hover{background:#f9fbff}
 .badge-gpu_cb{background:#f3e5f5;color:#7b1fa2}
 .badge-gpu_ri{background:#fff3e0;color:#e65100}
 .btn{padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:all .2s}
+.btn[disabled],.btn:disabled{opacity:.55;cursor:not-allowed}
 .btn-primary{background:#1a73e8;color:#fff}
 .btn-primary:hover{background:#1557b0}
 .btn-danger{background:#d32f2f;color:#fff}

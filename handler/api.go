@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/KevinZhao/SmartRenew/config"
@@ -28,12 +29,40 @@ type Syncer interface {
 	SyncAll(ctx context.Context) (int, []error)
 }
 
+// syncState tracks the progress of the most recent background sync run.
+type syncState struct {
+	mu         sync.Mutex
+	running    bool
+	startedAt  time.Time
+	finishedAt time.Time
+	synced     int
+	errors     []string
+}
+
+func (s *syncState) snapshot() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resp := map[string]any{
+		"running": s.running,
+		"synced":  s.synced,
+		"errors":  append([]string(nil), s.errors...),
+	}
+	if !s.startedAt.IsZero() {
+		resp["started_at"] = s.startedAt.UTC().Format(time.RFC3339)
+	}
+	if !s.finishedAt.IsZero() {
+		resp["finished_at"] = s.finishedAt.UTC().Format(time.RFC3339)
+	}
+	return resp
+}
+
 type Handler struct {
-	store    ReservationStore
-	syncer   Syncer
-	cfg      *config.Config
-	frontend fs.FS
-	mux      *http.ServeMux
+	store     ReservationStore
+	syncer    Syncer
+	cfg       *config.Config
+	frontend  fs.FS
+	mux       *http.ServeMux
+	syncState syncState
 }
 
 func New(s ReservationStore, sc Syncer, cfg *config.Config, frontendFS fs.FS) *Handler {
@@ -50,6 +79,7 @@ func (h *Handler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/reservations", h.listReservations)
 	h.mux.HandleFunc("GET /api/alerts", h.getAlerts)
 	h.mux.HandleFunc("POST /api/sync", h.syncAll)
+	h.mux.HandleFunc("GET /api/sync/status", h.syncStatus)
 	h.mux.HandleFunc("GET /api/export", h.exportCSV)
 	h.mux.HandleFunc("POST /api/import", h.importCSV)
 	h.mux.HandleFunc("GET /api/health", h.healthCheck)
@@ -78,29 +108,70 @@ func (h *Handler) getAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, alerts)
 }
 
+// syncAll triggers a full account sync in the background and returns
+// immediately with 202 Accepted so that upstream proxies (CloudFront, ALB)
+// do not time out waiting for the long-running operation. Progress and
+// results can be polled via GET /api/sync/status.
 func (h *Handler) syncAll(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-
-	total, errs := h.syncer.SyncAll(ctx)
-	errStrs := make([]string, len(errs))
-	for i, e := range errs {
-		errStrs[i] = e.Error()
-	}
-
-	resp := map[string]any{
-		"synced": total,
-		"errors": errStrs,
-	}
-
-	// Return 500 when nothing synced and there were errors
-	if total == 0 && len(errs) > 0 {
+	h.syncState.mu.Lock()
+	if h.syncState.running {
+		startedAt := h.syncState.startedAt
+		synced := h.syncState.synced
+		h.syncState.mu.Unlock()
+		snap := map[string]any{
+			"running": true,
+			"synced":  synced,
+		}
+		if !startedAt.IsZero() {
+			snap["started_at"] = startedAt.UTC().Format(time.RFC3339)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(resp)
+		// 409 Conflict signals "already running" distinctly from "just started".
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(snap)
 		return
 	}
-	writeJSON(w, resp)
+	h.syncState.running = true
+	h.syncState.startedAt = time.Now()
+	h.syncState.finishedAt = time.Time{}
+	h.syncState.synced = 0
+	h.syncState.errors = nil
+	startedAt := h.syncState.startedAt
+	h.syncState.mu.Unlock()
+
+	go func() {
+		// Use a fresh context fully decoupled from the HTTP request so that
+		// upstream proxy disconnects do not cancel the sync mid-flight.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+
+		total, errs := h.syncer.SyncAll(ctx)
+		errStrs := make([]string, len(errs))
+		for i, e := range errs {
+			errStrs[i] = e.Error()
+		}
+
+		h.syncState.mu.Lock()
+		h.syncState.running = false
+		h.syncState.finishedAt = time.Now()
+		h.syncState.synced = total
+		h.syncState.errors = errStrs
+		h.syncState.mu.Unlock()
+
+		slog.Info("async sync done", "items", total, "errors", len(errs))
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]any{
+		"running":    true,
+		"started_at": startedAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// syncStatus returns the current state of the background sync job.
+func (h *Handler) syncStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, h.syncState.snapshot())
 }
 
 func (h *Handler) exportCSV(w http.ResponseWriter, r *http.Request) {

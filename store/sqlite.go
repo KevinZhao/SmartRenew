@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/KevinZhao/SmartRenew/model"
@@ -281,4 +282,48 @@ func (s *Store) ListGPUCoverage(accountFilter string) ([]model.GPUCoverage, erro
 func (s *Store) DeleteGPUCoverageByAccountID(accountID string) error {
 	_, err := s.db.Exec("DELETE FROM gpu_coverage WHERE account_id = ?", accountID)
 	return err
+}
+
+// pruneMaxAccounts caps the keep list below SQLite's default parameter limit
+// (SQLITE_LIMIT_VARIABLE_NUMBER, typically 999) with a safety margin.
+const pruneMaxAccounts = 900
+
+// PruneAccounts deletes all reservations and gpu_coverage rows whose
+// account_id is not in the provided keep set. Used to clean up data for
+// accounts that were removed from configuration. Returns the number of
+// rows deleted across both tables. When keep is empty the call is a no-op
+// to guard against accidental full-wipe.
+func (s *Store) PruneAccounts(keep []string) (int64, error) {
+	if len(keep) == 0 {
+		return 0, nil
+	}
+	if len(keep) > pruneMaxAccounts {
+		return 0, fmt.Errorf("prune: too many accounts (%d), limit %d", len(keep), pruneMaxAccounts)
+	}
+	var sb strings.Builder
+	args := make([]any, 0, len(keep))
+	for i, id := range keep {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('?')
+		args = append(args, id)
+	}
+	placeholders := sb.String()
+	var total int64
+	for _, table := range []string{"reservations", "gpu_coverage"} {
+		res, err := s.db.Exec(
+			fmt.Sprintf("DELETE FROM %s WHERE account_id NOT IN (%s)", table, placeholders),
+			args...)
+		if err != nil {
+			return total, fmt.Errorf("prune %s: %w", table, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			slog.Warn("prune rows affected", "table", table, "err", err)
+			continue
+		}
+		total += n
+	}
+	return total, nil
 }

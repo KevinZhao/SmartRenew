@@ -20,6 +20,10 @@ type Account struct {
 	// typically used when the IAM principal lacks permissions for a service.
 	// Accepted values: rds_ri, cache_ri, redshift_ri, opensearch_ri, memorydb_ri, bedrock_pt.
 	SkipTypes []string `json:"skip_types"`
+	// SNSOnly marks this account as a credential container used solely by
+	// notifiers (e.g. cross-account SNS publishing). When true, SyncAll
+	// skips this account so its resources are not imported.
+	SNSOnly bool `json:"sns_only"`
 }
 
 // ShouldSkip reports whether the given type identifier is in SkipTypes.

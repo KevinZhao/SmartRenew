@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -30,7 +31,31 @@ func (sc *Scheduler) SyncAll(ctx context.Context) (int, []error) {
 	var allErrors []error
 	total := 0
 
+	// Drop rows for accounts that are no longer in configuration (or are
+	// SNS-only credential containers) so that removing an account from
+	// config actually cleans up its data.
+	keep := make([]string, 0, len(sc.cfg.Accounts))
+	for _, a := range sc.cfg.Accounts {
+		if a.SNSOnly || a.AccountID == "" {
+			continue
+		}
+		keep = append(keep, a.AccountID)
+	}
+	if len(keep) == 0 {
+		// All configured accounts are SNSOnly (or have unresolved AccountID).
+		// Skip prune to avoid wiping the database; surface this so operators
+		// notice a possible misconfiguration.
+		slog.Warn("no syncable accounts in config, skipping prune to avoid full wipe")
+	} else if pruned, err := sc.store.PruneAccounts(keep); err != nil {
+		allErrors = append(allErrors, fmt.Errorf("prune removed accounts: %w", err))
+	} else if pruned > 0 {
+		slog.Info("pruned rows for removed accounts", "rows", pruned, "keep", keep)
+	}
+
 	for _, acct := range sc.cfg.Accounts {
+		if acct.SNSOnly {
+			continue
+		}
 		items, errs := provider.SyncAccount(ctx, acct)
 		allErrors = append(allErrors, errs...)
 

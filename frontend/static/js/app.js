@@ -59,10 +59,12 @@ createApp({
             return 0;
         }
 
+        let msgTimer = null;
         function showMsg(text, isErr = false) {
             message.value = text;
             messageErr.value = isErr;
-            setTimeout(() => { message.value = ''; }, 5000);
+            if (msgTimer) clearTimeout(msgTimer);
+            msgTimer = setTimeout(() => { message.value = ''; msgTimer = null; }, 5000);
         }
 
         async function apiFetch(url, opts) {
@@ -104,18 +106,72 @@ createApp({
             }
         }
 
+        const syncRunning = ref(false);
+        let syncPollTimer = null;
+        const SYNC_POLL_TIMEOUT_MS = 10 * 60 * 1000; // hard cap so UI never spins forever
+        const SYNC_POLL_MAX_CONSECUTIVE_ERRS = 3;
+
         async function syncData() {
-            showMsg('Syncing from AWS...');
-            try {
-                const data = await apiFetch('/api/sync', { method: 'POST' });
-                const errCount = data.errors ? data.errors.length : 0;
-                showMsg(`Synced ${data.synced} items` + (errCount ? `, ${errCount} errors` : ''));
-                loadReservations();
-                loadAlerts();
-                loadGPUCoverage();
-            } catch (e) {
-                showMsg('Sync failed: ' + e.message, true);
+            if (syncRunning.value) {
+                showMsg('Sync already running, please wait...');
+                return;
             }
+            showMsg('Syncing from AWS... (this may take a few minutes)');
+            syncRunning.value = true;
+            try {
+                // Fire-and-forget — backend returns 202 (new run) or 409 (already running).
+                const res = await fetch('/api/sync', { method: 'POST' });
+                if (res.status !== 202 && res.status !== 409 && !res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(body.error || `HTTP ${res.status}`);
+                }
+                pollSyncStatus();
+            } catch (e) {
+                syncRunning.value = false;
+                showMsg('Sync failed to start: ' + e.message, true);
+            }
+        }
+
+        function pollSyncStatus() {
+            if (syncPollTimer) { clearTimeout(syncPollTimer); syncPollTimer = null; }
+            const pollStart = Date.now();
+            let consecErrs = 0;
+            const tick = async () => {
+                if (Date.now() - pollStart > SYNC_POLL_TIMEOUT_MS) {
+                    syncRunning.value = false;
+                    syncPollTimer = null;
+                    showMsg('Sync is still running on the server (UI gave up after 10 minutes). Refresh later to see results.', true);
+                    return;
+                }
+                try {
+                    const s = await apiFetch('/api/sync/status');
+                    consecErrs = 0;
+                    if (s.running) {
+                        syncRunning.value = true;
+                        syncPollTimer = setTimeout(tick, 5000);
+                        return;
+                    }
+                    syncRunning.value = false;
+                    syncPollTimer = null;
+                    const errCount = s.errors ? s.errors.length : 0;
+                    showMsg(`Synced ${s.synced || 0} items` + (errCount ? `, ${errCount} errors` : ''), errCount > 0);
+                    loadReservations();
+                    loadAlerts();
+                    loadGPUCoverage();
+                } catch (e) {
+                    consecErrs += 1;
+                    if (consecErrs >= SYNC_POLL_MAX_CONSECUTIVE_ERRS) {
+                        syncRunning.value = false;
+                        syncPollTimer = null;
+                        showMsg('Status check failed (sync may still be running on the server): ' + e.message, true);
+                        return;
+                    }
+                    // Transient error — keep polling.
+                    syncPollTimer = setTimeout(tick, 5000);
+                }
+            };
+            // First probe after a short delay so the goroutine has a chance to flip running=true.
+            syncPollTimer = setTimeout(tick, 2000);
         }
 
         function exportCSV() {
@@ -300,9 +356,24 @@ createApp({
             return map[coverage] || '';
         }
 
+        // If a sync is still running (e.g. triggered by a previous user session),
+        // pick up its status on page load so the UI stays coherent.
+        async function resumeSyncIfRunning() {
+            try {
+                const s = await apiFetch('/api/sync/status');
+                // Guard against racing with a concurrent click that already started polling.
+                if (s.running && !syncPollTimer) {
+                    syncRunning.value = true;
+                    showMsg('Sync in progress...');
+                    pollSyncStatus();
+                }
+            } catch (_) { /* ignore */ }
+        }
+
         onMounted(() => {
             loadReservations();
             loadGPUCoverage();
+            resumeSyncIfRunning();
         });
 
         return {
@@ -315,7 +386,7 @@ createApp({
             sortKey, sortDir, sortBy,
             gpuSortKey, gpuSortDir, gpuSortBy,
             sortArrow,
-            syncData, exportCSV, importFile,
+            syncData, syncRunning, exportCSV, importFile,
             loadAlerts, loadGPUCoverage,
             formatCapacity, formatDate, daysUntil, daysClass, daysDisplay,
             levelColor, levelText,

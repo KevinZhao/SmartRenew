@@ -13,7 +13,7 @@
         <h1>SmartRenew</h1>
         <div class="actions">
             <span v-if="message" :class="['msg', messageErr ? 'err' : '']">{{ message }}</span>
-            <button class="btn btn-white" @click="syncData">Sync AWS</button>
+            <button class="btn btn-white" @click="syncData" :disabled="syncRunning">{{ syncRunning ? 'Syncing…' : 'Sync AWS' }}</button>
             <button class="btn btn-white" @click="exportCSV">Export CSV</button>
             <label class="btn btn-white" style="cursor:pointer">
                 Import CSV
