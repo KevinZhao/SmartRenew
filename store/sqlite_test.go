@@ -546,3 +546,60 @@ func TestPruneAccountsDropsUnknownAccounts(t *testing.T) {
 		t.Fatalf("got %d rows, want only the kept account", len(rows))
 	}
 }
+
+func TestCapacityUnitRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	end := time.Now().UTC().Add(100 * 24 * time.Hour)
+	for _, tc := range []struct{ id, unit string }{
+		{"cards-row", "cards"},
+		{"cores-row", "cores"},
+		{"unknown-row", ""},
+	} {
+		r := res(tc.id, end)
+		r.Type = model.TypeSP
+		r.EquivCores = 128
+		r.CapacityUnit = tc.unit
+		if err := s.Upsert(r); err != nil {
+			t.Fatalf("upsert %s: %v", tc.id, err)
+		}
+	}
+
+	rows, err := s.List("sp", "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.ResourceID] = r.CapacityUnit
+	}
+	for id, want := range map[string]string{"cards-row": "cards", "cores-row": "cores", "unknown-row": ""} {
+		if got[id] != want {
+			t.Errorf("%s capacity_unit = %q, want %q", id, got[id], want)
+		}
+	}
+}
+
+func TestCapacityUnitUpdatedOnUpsert(t *testing.T) {
+	// A family gaining a card-count override must be able to switch units.
+	s := newTestStore(t)
+	end := time.Now().UTC().Add(100 * 24 * time.Hour)
+	r := res("switch", end)
+	r.Type = model.TypeSP
+	r.EquivCores = 4608
+	r.CapacityUnit = "cores"
+	if err := s.Upsert(r); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	r.EquivCores = 576
+	r.CapacityUnit = "cards"
+	if err := s.Upsert(r); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	rows, err := s.List("sp", "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if rows[0].CapacityUnit != "cards" || rows[0].EquivCores != 576 {
+		t.Fatalf("got %v %s, want 576 cards", rows[0].EquivCores, rows[0].CapacityUnit)
+	}
+}

@@ -107,6 +107,7 @@ func (s *Store) migrate() error {
 	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN used_count INTEGER DEFAULT 0")
 	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN hourly_rate REAL DEFAULT 0")
 	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN equiv_cores REAL DEFAULT 0")
+	_, _ = s.db.Exec("ALTER TABLE reservations ADD COLUMN capacity_unit TEXT DEFAULT ''")
 
 	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS gpu_coverage (
@@ -211,17 +212,18 @@ func (s *Store) normaliseStoredTimestamps() error {
 func (s *Store) Upsert(r model.Reservation) error {
 	_, err := s.db.Exec(`
 		INSERT INTO reservations (id, account_alias, account_id, region, type, resource_id,
-			instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+			instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, capacity_unit, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status, end_time=excluded.end_time, quantity=excluded.quantity,
 			used_count=excluded.used_count, description=excluded.description,
 			hourly_rate=excluded.hourly_rate, equiv_cores=excluded.equiv_cores,
+			capacity_unit=excluded.capacity_unit,
 			updated_at=datetime('now')`,
 		r.ID, r.AccountAlias, r.AccountID, r.Region, string(r.Type), r.ResourceID,
 		r.InstanceType, r.Platform, r.Quantity, r.UsedCount,
 		formatTime(r.StartTime), formatTime(r.EndTime),
-		r.Status, r.Description, r.HourlyRate, r.EquivCores)
+		r.Status, r.Description, r.HourlyRate, r.EquivCores, r.CapacityUnit)
 	return err
 }
 
@@ -229,17 +231,18 @@ func (s *Store) Upsert(r model.Reservation) error {
 func upsertTx(tx *sql.Tx, r model.Reservation) error {
 	_, err := tx.Exec(`
 		INSERT INTO reservations (id, account_alias, account_id, region, type, resource_id,
-			instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+			instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, capacity_unit, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			status=excluded.status, end_time=excluded.end_time, quantity=excluded.quantity,
 			used_count=excluded.used_count, description=excluded.description,
 			hourly_rate=excluded.hourly_rate, equiv_cores=excluded.equiv_cores,
+			capacity_unit=excluded.capacity_unit,
 			updated_at=datetime('now')`,
 		r.ID, r.AccountAlias, r.AccountID, r.Region, string(r.Type), r.ResourceID,
 		r.InstanceType, r.Platform, r.Quantity, r.UsedCount,
 		formatTime(r.StartTime), formatTime(r.EndTime),
-		r.Status, r.Description, r.HourlyRate, r.EquivCores)
+		r.Status, r.Description, r.HourlyRate, r.EquivCores, r.CapacityUnit)
 	return err
 }
 
@@ -292,7 +295,7 @@ func (s *Store) ReplaceGPUCoverage(accountID string, items []model.GPUCoverage) 
 }
 
 func (s *Store) List(typeFilter, accountFilter string) ([]model.Reservation, error) {
-	query := "SELECT id, account_alias, account_id, region, type, resource_id, instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at FROM reservations WHERE 1=1"
+	query := "SELECT id, account_alias, account_id, region, type, resource_id, instance_type, platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, capacity_unit, updated_at FROM reservations WHERE 1=1"
 	args := []any{}
 	if typeFilter != "" {
 		query += " AND type = ?"
@@ -311,7 +314,7 @@ func (s *Store) List(typeFilter, accountFilter string) ([]model.Reservation, err
 // just crossed; pass nil to leave Threshold unset.
 func (s *Store) GetAlerts(maxDays int, remindDays ...int) ([]model.Alert, error) {
 	query := `SELECT id, account_alias, account_id, region, type, resource_id, instance_type,
-		platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, updated_at
+		platform, quantity, used_count, start_time, end_time, status, description, hourly_rate, equiv_cores, capacity_unit, updated_at
 		FROM reservations
 		WHERE end_time != ''
 		  AND julianday(end_time) > julianday('now')
@@ -405,7 +408,7 @@ func (s *Store) queryReservations(query string, args ...any) ([]model.Reservatio
 		var typ, startStr, endStr, updatedStr string
 		err := rows.Scan(&r.ID, &r.AccountAlias, &r.AccountID, &r.Region,
 			&typ, &r.ResourceID, &r.InstanceType, &r.Platform, &r.Quantity, &r.UsedCount,
-			&startStr, &endStr, &r.Status, &r.Description, &r.HourlyRate, &r.EquivCores, &updatedStr)
+			&startStr, &endStr, &r.Status, &r.Description, &r.HourlyRate, &r.EquivCores, &r.CapacityUnit, &updatedStr)
 		if err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}

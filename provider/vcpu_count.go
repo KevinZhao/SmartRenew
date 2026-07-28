@@ -77,13 +77,31 @@ var computeSPReferenceFallbacks = []string{
 	"m7i.xlarge", "m7g.xlarge", "m6i.xlarge", "m6g.xlarge",
 }
 
-// normalizeSPRate converts a raw SP rate table into a unit $/hr figure for the UI:
-//   - GPU family SP → top rate ÷ GPU card count (unit = $/card; equivCores = commitment ÷ unit)
-//   - CPU family SP → top rate ÷ vCPU count     (unit = $/vCPU; equivCores = commitment ÷ unit)
-//   - Compute SP    → reference instance rate ÷ vCPU (unit = $/vCPU; equivCores = commitment ÷ unit)
-func normalizeSPRate(spType string, rates map[string]float64, commitmentStr string) (unitRate, equivCores float64) {
+// CapacityUnit says what a capacity figure counts. It travels with the number
+// so the UI cannot mislabel it: the label and the value are derived from the
+// same data. Guessing the unit from the instance family name instead produced
+// "4608 cards" for a g7e plan whose figure was really a vCPU count, because
+// g7e has no known card count but the name starts with "g7".
+type CapacityUnit string
+
+const (
+	CapacityUnknown CapacityUnit = ""
+	CapacityCards   CapacityUnit = "cards"
+	CapacityCores   CapacityUnit = "cores"
+)
+
+// normalizeSPRate converts a raw SP rate table into a unit $/hr figure plus the
+// capacity that unit rate implies, and reports which unit the capacity is in:
+//   - GPU family SP → top rate ÷ card count (unit = $/card, capacity in cards)
+//   - CPU family SP → top rate ÷ vCPU count (unit = $/vCPU, capacity in cores)
+//   - Compute SP    → reference instance rate ÷ vCPU (unit = $/vCPU, cores)
+//
+// A GPU family absent from the card-count table yields cores, not cards: the
+// only divisor available is the vCPU count, so the resulting figure is vCPUs.
+// Add the family to Config.GPUCardCounts to get a per-card view instead.
+func normalizeSPRate(spType string, rates map[string]float64, commitmentStr string) (unitRate, capacity float64, unit CapacityUnit) {
 	if len(rates) == 0 {
-		return 0, 0
+		return 0, 0, CapacityUnknown
 	}
 	commitment, _ := parseFloatSafe(commitmentStr)
 
@@ -98,17 +116,14 @@ func normalizeSPRate(spType string, rates map[string]float64, commitmentStr stri
 			}
 		}
 		if refIType == "" {
-			return 0, 0
+			return 0, 0, CapacityUnknown
 		}
 		vcpu := vCPUCount(refIType)
 		if vcpu <= 0 {
-			return 0, 0
+			return 0, 0, CapacityUnknown
 		}
 		unitRate = refRate / float64(vcpu)
-		if unitRate > 0 && commitment > 0 {
-			equivCores = commitment / unitRate
-		}
-		return unitRate, equivCores
+		return unitRate, capacityFor(commitment, unitRate), CapacityCores
 	}
 
 	// Family-scoped SP (EC2Instance type): pick highest rate in the family's rate table.
@@ -121,17 +136,26 @@ func normalizeSPRate(spType string, rates map[string]float64, commitmentStr stri
 		}
 	}
 	if topIType == "" {
-		return 0, 0
+		return 0, 0, CapacityUnknown
 	}
+	// The divisor must come from the same instance type as topRate, so the unit
+	// rate and the capacity it implies describe the same thing.
 	if cards := GPUCardCount(topIType); cards > 0 {
 		unitRate = topRate / float64(cards)
-	} else if vcpu := vCPUCount(topIType); vcpu > 0 {
+		return unitRate, capacityFor(commitment, unitRate), CapacityCards
+	}
+	if vcpu := vCPUCount(topIType); vcpu > 0 {
 		unitRate = topRate / float64(vcpu)
-	} else {
-		unitRate = topRate
+		return unitRate, capacityFor(commitment, unitRate), CapacityCores
 	}
-	if unitRate > 0 && commitment > 0 {
-		equivCores = commitment / unitRate
+	// Neither card nor vCPU count is known: report the raw rate and no capacity,
+	// rather than a number with no meaningful unit.
+	return topRate, 0, CapacityUnknown
+}
+
+func capacityFor(commitment, unitRate float64) float64 {
+	if unitRate <= 0 || commitment <= 0 {
+		return 0
 	}
-	return unitRate, equivCores
+	return commitment / unitRate
 }

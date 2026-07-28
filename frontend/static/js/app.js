@@ -375,17 +375,15 @@ createApp({
             return list.slice().sort((a, b) => compareValues(a, b, key) * sign);
         });
 
-        const gpuFamilyPrefixes = ['p3','p4','p5','p6','g4','g5','g6','g7','inf','trn','dl'];
-        function isGpuFamily(family) {
-            if (!family) return false;
-            const f = family.toLowerCase();
-            return gpuFamilyPrefixes.some(p => f.startsWith(p));
-        }
         function formatCapacity(r) {
             if (r.type !== 'sp' && r.type !== 'cb') return '-';
             if (!r.equiv_cores || r.equiv_cores <= 0) return '-';
+            // The unit comes from the backend, which knows whether the figure was
+            // divided by a card count or a vCPU count. Inferring it from the
+            // instance family name here used to label vCPU totals as "cards".
+            const unit = r.capacity_unit;
+            if (!unit) return '-';
             const n = r.equiv_cores;
-            const unit = isGpuFamily(r.instance_type) ? 'cards' : 'cores';
             // Compute SP is approximate (depends on reference instance choice);
             // family-scoped SPs and CBs are exact.
             const isCompute = r.type === 'sp' && r.platform === 'Compute';

@@ -178,7 +178,7 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 				}
 			}
 
-			unitRate, equivCores := normalizeSPRate(string(sp.SavingsPlanType), rates, aws.ToString(sp.Commitment))
+			unitRate, capacity, capUnit := normalizeSPRate(string(sp.SavingsPlanType), rates, aws.ToString(sp.Commitment))
 
 			results = append(results, model.Reservation{
 				ID:           fmt.Sprintf("%s_%s_%s", acct.AccountID, spRegion, aws.ToString(sp.SavingsPlanId)),
@@ -195,7 +195,8 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 				Status:       string(sp.State),
 				Description:  fmt.Sprintf("%s - %s", sp.SavingsPlanType, sp.PaymentOption),
 				HourlyRate:   unitRate,
-				EquivCores:   equivCores,
+				EquivCores:   capacity,
+				CapacityUnit: string(capUnit),
 			})
 		}
 		nextToken = out.NextToken
@@ -261,12 +262,14 @@ func fetchCapacityReservations(ctx context.Context, cfg aws.Config, acct config.
 				r.Type = model.TypeCB
 				r.Description = fmt.Sprintf("Capacity Block - %s", aws.ToString(cr.AvailabilityZone))
 				// Capacity = instances × accelerator cards per instance; fall back to
-				// vCPUs for non-GPU instance types. Stored in EquivCores so the UI
-				// can render it the same way as SP capacity.
+				// vCPUs for instance types with no known card count. The unit is
+				// recorded so the UI shows what was actually counted.
 				if cards := GPUCardCount(r.InstanceType); cards > 0 {
 					r.EquivCores = float64(total * cards)
+					r.CapacityUnit = string(CapacityCards)
 				} else if vcpu := vCPUCount(r.InstanceType); vcpu > 0 {
 					r.EquivCores = float64(total * vcpu)
+					r.CapacityUnit = string(CapacityCores)
 				}
 				cbs = append(cbs, r)
 			} else {

@@ -41,10 +41,15 @@ type Reservation struct {
 	//   - Compute SP    → $/vCPU core (via reference instance c7i.xlarge or fallbacks)
 	// Not populated for non-SP resources.
 	HourlyRate float64 `json:"hourly_rate"`
-	// EquivCores is the effective vCPU capacity a Compute SP commitment can cover,
-	// computed as commitment ÷ per-vCPU rate. Only populated for Compute SPs.
-	EquivCores float64   `json:"equiv_cores"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// EquivCores is the capacity the commitment covers, expressed in the unit
+	// named by CapacityUnit — accelerator cards for GPU families with a known
+	// card count, otherwise vCPU cores. Populated for SPs and Capacity Blocks.
+	EquivCores float64 `json:"equiv_cores"`
+	// CapacityUnit is what EquivCores counts: "cards", "cores", or "" when
+	// unknown. It is stored alongside the number so the UI never has to infer
+	// the unit from the instance family name.
+	CapacityUnit string    `json:"capacity_unit"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type AlertLevel string

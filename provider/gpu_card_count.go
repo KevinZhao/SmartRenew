@@ -22,6 +22,9 @@ var defaultGPUCardCount = map[string]int{
 	"g6.16xlarge": 1, "g6.12xlarge": 4, "g6.24xlarge": 4, "g6.48xlarge": 8,
 	"g6e.xlarge": 1, "g6e.2xlarge": 1, "g6e.4xlarge": 1, "g6e.8xlarge": 1,
 	"g6e.16xlarge": 1, "g6e.12xlarge": 4, "g6e.24xlarge": 4, "g6e.48xlarge": 8,
+	// G7e (NVIDIA RTX PRO 6000) — verified via ec2 describe-instance-types.
+	"g7e.2xlarge": 1, "g7e.4xlarge": 1, "g7e.8xlarge": 1,
+	"g7e.12xlarge": 2, "g7e.24xlarge": 4, "g7e.48xlarge": 8,
 
 	// G4 (NVIDIA T4 / AMD Radeon Pro V520)
 	"g4dn.xlarge": 1, "g4dn.2xlarge": 1, "g4dn.4xlarge": 1, "g4dn.8xlarge": 1,
