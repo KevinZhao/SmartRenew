@@ -27,5 +27,23 @@
   "sync_interval": "6h",
   "alert_interval": "1h",
   "listen_addr": ":5000",
-  "db_path": "/data/smartrenew.db"
+  "db_path": "/data/smartrenew.db",
+  "auth": {
+    "enabled": true,
+    "users": [
+      {
+        "username": "admin",
+        "password_hash": "GENERATE_WITH: ./smartrenew -hash-password 'your-password'"
+      },
+      {
+        "username": "viewer",
+        "password": "PLAINTEXT_DEV_ONLY_PREFER_password_hash"
+      }
+    ],
+    "users_file": "",
+    "session_ttl": "12h",
+    "max_login_attempts": 5,
+    "lockout_duration": "15m",
+    "cookie_secure": false
+  }
 }

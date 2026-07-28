@@ -32,7 +32,7 @@ go test -cover ./...       # with coverage
 go test ./store/...        # single package
 ```
 
-No tests exist yet — test files need to be created.
+Tests exist for `auth/`, `config/` and `handler/`. Other packages have none yet.
 
 ## Config
 
@@ -46,7 +46,8 @@ config/          — JSON config loading, validation, env overrides
 provider/        — AWS API calls (EC2 + SavingsPlans SDKs), returns []model.Reservation
 store/           — SQLite persistence (WAL mode), schema auto-migration, upsert/query/notify-log
 scheduler/       — Cron loop (sync every 6h, alert check every 1h), dedup via notify_log table
-handler/         — HTTP API (net/http ServeMux, Go 1.22+ method routing) + embedded SPA
+auth/            — password hashing (PBKDF2), in-memory sessions, static user list, login rate limiting
+handler/         — HTTP API (net/http ServeMux, Go 1.22+ method routing) + auth middleware + embedded SPA
 notifier/        — Notifier interface + Lark webhook implementation
 model/           — Shared types: Reservation, Alert, AlertLevel, ResourceType constants
 csvutil/         — CSV import/export for reservations
@@ -78,13 +79,47 @@ deploy/k8s/      — Kubernetes manifests (namespace, deployment, service, ingre
 
 ### API endpoints
 
+All endpoints except `/api/health`, `/api/login`, `/api/me` and the login page
+assets require a valid session cookie (see Auth below).
+
 - `GET /api/reservations?type=&account=` — list with optional filters
 - `GET /api/alerts` — expiring resources within `max(remind_days)` window
-- `POST /api/sync` — trigger manual sync (5min timeout)
+- `POST /api/sync` — trigger manual sync in background, returns 202 (409 if already running)
+- `GET /api/sync/status` — poll background sync progress
 - `GET /api/export` — CSV download
 - `POST /api/import` — CSV upload (multipart)
-- `GET /api/health` — SQLite ping
-- `GET /` — embedded Vue SPA
+- `GET /api/gpu-coverage?account=` — GPU instance coverage list
+- `GET /api/health` — SQLite ping (public: k8s probes)
+- `POST /api/login` — `{username, password}` → session cookie
+- `POST /api/logout` — revoke session
+- `GET /api/me` — current auth state (401 when unauthenticated)
+- `GET /` — embedded Vue SPA (redirects to `/login.html` when unauthenticated)
+
+## Auth
+
+Static username/password login — no user management, users are fixed in config.
+
+```bash
+# Generate a password hash for auth.users[].password_hash
+./smartrenew -hash-password 'your-password'
+```
+
+Config lives under the `auth` key (see `config.example.json`). Users can also be
+loaded from a separate file via `auth.users_file` / `SMARTRENEW_USERS_FILE` (used
+by `deploy/k8s/secret.yaml`), or a single hash injected via
+`SMARTRENEW_USER_<USERNAME_UPPER>_PASSWORD_HASH`.
+
+- `auth.enabled` defaults to **true**; startup fails if no users are configured.
+- Passwords are stored as PBKDF2-SHA256, 600k iterations (`auth/password.go`).
+  A plaintext `password` field is accepted for dev and hashed at startup.
+- Sessions are in-memory (`auth/session.go`), so a restart logs everyone out.
+  Single replica only — `deployment.yaml` uses `strategy: Recreate`.
+- Failed logins are throttled per client IP *and* per username
+  (`auth/ratelimit.go`); the username limiter is what stops brute force that
+  rotates `X-Forwarded-For`.
+- State-changing requests (`POST`) additionally require a same-origin
+  `Origin`/`Referer`, since `SameSite=Lax` ignores ports and sibling subdomains.
+- Set `auth.cookie_secure: true` when serving over HTTPS.
 
 ## Known Issues
 

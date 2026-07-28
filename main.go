@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"embed"
+	"flag"
+	"fmt"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -15,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
+	"github.com/KevinZhao/SmartRenew/auth"
 	"github.com/KevinZhao/SmartRenew/config"
 	"github.com/KevinZhao/SmartRenew/handler"
 	"github.com/KevinZhao/SmartRenew/notifier"
@@ -27,6 +30,18 @@ import (
 var frontendFiles embed.FS
 
 func main() {
+	hashPassword := flag.String("hash-password", "", "print a PBKDF2 hash for the given password and exit (for auth.users[].password_hash)")
+	flag.Parse()
+
+	if *hashPassword != "" {
+		h, err := auth.HashPassword(*hashPassword)
+		if err != nil {
+			log.Fatalf("hash password: %v", err)
+		}
+		fmt.Println(h)
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -99,7 +114,32 @@ func main() {
 	if err != nil {
 		log.Fatalf("frontend embed: %v", err)
 	}
-	h := handler.New(db, sc, cfg, frontendFS)
+
+	// Build auth (static users from config). Fails fast on bad hashes.
+	var handlerOpts []handler.Option
+	if cfg.Auth.IsEnabled() {
+		authn, err := auth.NewAuthenticator(cfg.Auth.Users)
+		if err != nil {
+			log.Fatalf("init auth: %v", err)
+		}
+		sessions := auth.NewSessionStore(cfg.Auth.ParseSessionTTL())
+		limiter := auth.NewLoginLimiter(cfg.Auth.MaxAttempts(), cfg.Auth.ParseLockoutDuration())
+		// Per-username limiter: looser threshold so a third party spraying a
+		// known username cannot trivially lock the real user out, while still
+		// capping brute force that rotates X-Forwarded-For.
+		userLimiter := auth.NewLoginLimiter(cfg.Auth.MaxAttempts()*4, cfg.Auth.ParseLockoutDuration())
+		handlerOpts = append(handlerOpts, handler.WithAuth(authn, sessions, limiter, userLimiter, cfg.Auth.CookieSecure))
+		slog.Info("auth enabled",
+			"users", authn.Usernames(),
+			"session_ttl", cfg.Auth.ParseSessionTTL().String(),
+			"max_login_attempts", cfg.Auth.MaxAttempts(),
+			"lockout", cfg.Auth.ParseLockoutDuration().String(),
+			"cookie_secure", cfg.Auth.CookieSecure)
+	} else {
+		slog.Warn("auth disabled — UI and API are open to anyone who can reach the port")
+	}
+
+	h := handler.New(db, sc, cfg, frontendFS, handlerOpts...)
 
 	// Start scheduler
 	ctx, cancel := context.WithCancel(context.Background())

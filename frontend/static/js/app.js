@@ -67,13 +67,52 @@ createApp({
             msgTimer = setTimeout(() => { message.value = ''; msgTimer = null; }, 5000);
         }
 
+        const authEnabled = ref(false);
+        const username = ref('');
+
+        // Sends the browser to the login page, preserving where the user was.
+        function redirectToLogin() {
+            const next = encodeURIComponent(window.location.pathname + window.location.search);
+            window.location.replace(`/login.html?next=${next}`);
+        }
+
         async function apiFetch(url, opts) {
             const res = await fetch(url, opts);
+            if (res.status === 401) {
+                redirectToLogin();
+                throw new Error('Session expired, redirecting to sign in');
+            }
             if (!res.ok) {
                 const body = await res.json().catch(() => ({}));
                 throw new Error(body.error || `HTTP ${res.status}`);
             }
             return res.json();
+        }
+
+        // loadMe resolves the session before any data call, so an expired
+        // cookie sends the user to the login page instead of showing errors.
+        async function loadMe() {
+            try {
+                const res = await fetch('/api/me');
+                if (res.status === 401) {
+                    redirectToLogin();
+                    return false;
+                }
+                const me = await res.json();
+                authEnabled.value = !!me.auth_enabled;
+                username.value = me.username || '';
+                return true;
+            } catch (e) {
+                showMsg('Could not verify session: ' + e.message, true);
+                return false;
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch('/api/logout', { method: 'POST' });
+            } catch (_) { /* clearing the cookie server-side is best-effort */ }
+            window.location.replace('/login.html');
         }
 
         async function loadReservations() {
@@ -121,6 +160,10 @@ createApp({
             try {
                 // Fire-and-forget — backend returns 202 (new run) or 409 (already running).
                 const res = await fetch('/api/sync', { method: 'POST' });
+                if (res.status === 401) {
+                    redirectToLogin();
+                    throw new Error('Session expired, redirecting to sign in');
+                }
                 if (res.status !== 202 && res.status !== 409 && !res.ok) {
                     const body = await res.json().catch(() => ({}));
                     throw new Error(body.error || `HTTP ${res.status}`);
@@ -370,7 +413,10 @@ createApp({
             } catch (_) { /* ignore */ }
         }
 
-        onMounted(() => {
+        onMounted(async () => {
+            // Gate data loading on a valid session so 401s do not race into
+            // multiple redirects.
+            if (!(await loadMe())) return;
             loadReservations();
             loadGPUCoverage();
             resumeSyncIfRunning();
@@ -380,6 +426,7 @@ createApp({
             activeTab, reservations, alerts, loading,
             filterType, filterAccount, searchText,
             message, messageErr,
+            authEnabled, username, logout,
             filteredReservations, stats, uniqueAccounts,
             gpuCoverage, gpuFilterAccount, gpuSearchText,
             gpuStats, filteredGPUCoverage,

@@ -61,3 +61,14 @@ tr:hover{background:#f9fbff}
 .msg.err{background:#ffebee;color:#c62828}
 .tag-input{padding:4px 8px;border:1px solid #1a73e8;border-radius:4px;font-size:13px;width:120px;outline:none}
 .btn-sm{padding:4px 10px;font-size:12px}
+.login-body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1a73e8,#0d47a1)}
+.login-card{background:#fff;border-radius:10px;padding:32px;width:100%;max-width:360px;box-shadow:0 8px 24px rgba(0,0,0,.2);display:flex;flex-direction:column;gap:16px}
+.login-card h1{font-size:24px;font-weight:600;color:#1a73e8}
+.login-sub{font-size:13px;color:#666;margin-top:-10px}
+.login-field{display:flex;flex-direction:column;gap:6px;font-size:13px;color:#555}
+.login-field input{padding:10px 12px;border:1px solid #d0d0d0;border-radius:6px;font-size:14px;outline:none}
+.login-field input:focus{border-color:#1a73e8}
+.login-error{padding:8px 12px;background:#ffebee;color:#c62828;border-radius:6px;font-size:13px}
+.login-submit{padding:11px 16px;font-size:14px}
+.user-box{display:flex;align-items:center;gap:8px;font-size:13px;color:#fff}
+.user-box .user-name{font-weight:600}

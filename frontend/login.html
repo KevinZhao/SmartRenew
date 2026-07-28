@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in &mdash; SmartRenew</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/vue.global.prod.js"></script>
+</head>
+<body class="login-body">
+<div id="login-app">
+    <form class="login-card" @submit.prevent="submit">
+        <h1>SmartRenew</h1>
+        <p class="login-sub">Sign in to continue</p>
+
+        <label class="login-field">
+            <span>Username</span>
+            <input type="text" v-model="username" autocomplete="username" autofocus required>
+        </label>
+
+        <label class="login-field">
+            <span>Password</span>
+            <input type="password" v-model="password" autocomplete="current-password" required>
+        </label>
+
+        <div v-if="error" class="login-error">{{ error }}</div>
+
+        <button class="btn btn-primary login-submit" type="submit" :disabled="busy">
+            {{ busy ? 'Signing in…' : 'Sign in' }}
+        </button>
+    </form>
+</div>
+<script src="/static/js/login.js"></script>
+</body>
+</html>

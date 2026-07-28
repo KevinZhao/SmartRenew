@@ -16,5 +16,13 @@ data:
       ],
       "remind_days": [30, 14, 7, 3, 1],
       "listen_addr": ":5000",
-      "db_path": "/data/smartrenew.db"
+      "db_path": "/data/smartrenew.db",
+      "auth": {
+        "enabled": true,
+        "users_file": "/etc/smartrenew/users/users.json",
+        "session_ttl": "12h",
+        "max_login_attempts": 5,
+        "lockout_duration": "15m",
+        "cookie_secure": true
+      }
     }

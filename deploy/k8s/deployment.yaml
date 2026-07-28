@@ -44,6 +44,9 @@ spec:
             - name: accounts
               mountPath: /etc/smartrenew/accounts
               readOnly: true
+            - name: users
+              mountPath: /etc/smartrenew/users
+              readOnly: true
             - name: data
               mountPath: /data
             - name: tmp
@@ -74,6 +77,9 @@ spec:
         - name: accounts
           secret:
             secretName: smartrenew-accounts
+        - name: users
+          secret:
+            secretName: smartrenew-users
         - name: data
           persistentVolumeClaim:
             claimName: smartrenew-data

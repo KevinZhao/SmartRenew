@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KevinZhao/SmartRenew/auth"
 	"github.com/KevinZhao/SmartRenew/config"
 	"github.com/KevinZhao/SmartRenew/csvutil"
 	"github.com/KevinZhao/SmartRenew/model"
@@ -63,10 +64,41 @@ type Handler struct {
 	frontend  fs.FS
 	mux       *http.ServeMux
 	syncState syncState
+
+	// Auth is optional: these fields are nil when auth.enabled is false.
+	authenticator *auth.Authenticator
+	sessions      *auth.SessionStore
+	// loginLimiter throttles by client IP, userLimiter by username. Both are
+	// needed: the client IP comes from a spoofable header behind a proxy.
+	loginLimiter      *auth.LoginLimiter
+	userLimiter       *auth.LoginLimiter
+	cookieSecure      bool
+	trustProxyHeaders bool
 }
 
-func New(s ReservationStore, sc Syncer, cfg *config.Config, frontendFS fs.FS) *Handler {
+// Option customises the Handler at construction time.
+type Option func(*Handler)
+
+// WithAuth enables session-based login enforcement on every route except
+// /api/health and the login page assets.
+func WithAuth(a *auth.Authenticator, sessions *auth.SessionStore, limiter, userLimiter *auth.LoginLimiter, cookieSecure bool) Option {
+	return func(h *Handler) {
+		h.authenticator = a
+		h.sessions = sessions
+		h.loginLimiter = limiter
+		h.userLimiter = userLimiter
+		h.cookieSecure = cookieSecure
+		// Behind CloudFront/ALB the socket peer is the proxy, so per-IP login
+		// throttling needs the forwarded client address to be meaningful.
+		h.trustProxyHeaders = true
+	}
+}
+
+func New(s ReservationStore, sc Syncer, cfg *config.Config, frontendFS fs.FS, opts ...Option) *Handler {
 	h := &Handler{store: s, syncer: sc, cfg: cfg, frontend: frontendFS, mux: http.NewServeMux()}
+	for _, opt := range opts {
+		opt(h)
+	}
 	h.registerRoutes()
 	return h
 }
@@ -76,15 +108,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) registerRoutes() {
-	h.mux.HandleFunc("GET /api/reservations", h.listReservations)
-	h.mux.HandleFunc("GET /api/alerts", h.getAlerts)
-	h.mux.HandleFunc("POST /api/sync", h.syncAll)
-	h.mux.HandleFunc("GET /api/sync/status", h.syncStatus)
-	h.mux.HandleFunc("GET /api/export", h.exportCSV)
-	h.mux.HandleFunc("POST /api/import", h.importCSV)
+	// Protected data endpoints.
+	h.mux.HandleFunc("GET /api/reservations", h.requireAuth(h.listReservations))
+	h.mux.HandleFunc("GET /api/alerts", h.requireAuth(h.getAlerts))
+	h.mux.HandleFunc("POST /api/sync", h.requireAuth(h.syncAll))
+	h.mux.HandleFunc("GET /api/sync/status", h.requireAuth(h.syncStatus))
+	h.mux.HandleFunc("GET /api/export", h.requireAuth(h.exportCSV))
+	h.mux.HandleFunc("POST /api/import", h.requireAuth(h.importCSV))
+	h.mux.HandleFunc("GET /api/gpu-coverage", h.requireAuth(h.listGPUCoverage))
+
+	// Public: k8s liveness/readiness probes must not need credentials.
 	h.mux.HandleFunc("GET /api/health", h.healthCheck)
-	h.mux.HandleFunc("GET /api/gpu-coverage", h.listGPUCoverage)
-	h.mux.Handle("/", http.FileServer(http.FS(h.frontend)))
+
+	// Auth endpoints.
+	h.mux.HandleFunc("POST /api/login", h.login)
+	h.mux.HandleFunc("POST /api/logout", h.logout)
+	h.mux.HandleFunc("GET /api/me", h.me)
+
+	fileServer := http.FileServer(http.FS(h.frontend))
+	h.mux.Handle("/", h.requireAuthPage(fileServer.ServeHTTP))
 }
 
 func (h *Handler) listReservations(w http.ResponseWriter, r *http.Request) {
