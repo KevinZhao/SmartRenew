@@ -7,7 +7,9 @@ COPY . .
 RUN CGO_ENABLED=1 go build -o smartrenew .
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates \
+# tzdata is needed so time.LoadLocation works; without it any non-UTC zone
+# lookup fails at runtime.
+RUN apk add --no-cache ca-certificates tzdata \
     && adduser -D -u 10001 appuser
 WORKDIR /app
 COPY --from=builder /app/smartrenew .

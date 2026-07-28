@@ -47,25 +47,24 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	// Auto-resolve missing account IDs via STS GetCallerIdentity.
+	// Auto-resolve missing account IDs via STS GetCallerIdentity. A failure on a
+	// notifier-only account is logged and tolerated; a failure on an account we
+	// actually sync is fatal.
 	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	for i := range cfg.Accounts {
-		a := &cfg.Accounts[i]
-		if a.AccountID != "" || len(a.Regions) == 0 {
-			continue
-		}
-		awsCfg := aws.Config{
-			Region:      a.Regions[0],
-			Credentials: credentials.NewStaticCredentialsProvider(a.AccessKey, a.SecretKey, ""),
-		}
-		id, err := provider.ResolveAccountID(resolveCtx, awsCfg)
-		if err != nil {
-			log.Fatalf("resolve account_id for %q: %v", a.Alias, err)
-		}
-		a.AccountID = id
-		slog.Info("account_id resolved via STS", "alias", a.Alias, "account_id", id)
-	}
+	degraded, err := config.ResolveAccountIDs(resolveCtx, cfg.Accounts,
+		func(ctx context.Context, accessKey, secretKey, region string) (string, error) {
+			return provider.ResolveAccountID(ctx, aws.Config{
+				Region:      region,
+				Credentials: credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
+			})
+		})
 	resolveCancel()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	if len(degraded) > 0 {
+		slog.Warn("starting with degraded notifier accounts", "aliases", degraded)
+	}
 
 	// Apply GPU card count overrides (config → provider registry).
 	if len(cfg.GPUCardCounts) > 0 {
@@ -102,6 +101,15 @@ func main() {
 			}
 			notifiers = append(notifiers, notifier.NewSNS(awsCfg, nc.TopicARN))
 			slog.Info("notifier enabled", "type", "sns", "topic", nc.TopicARN, "region", nc.Region, "via_account", nc.AccountAlias)
+			// Credentials are not verified here; a stale key surfaces as a send
+			// error per cycle rather than blocking startup.
+			for _, alias := range degraded {
+				if alias == nc.AccountAlias {
+					slog.Warn("sns notifier uses an account whose credentials could not be verified; "+
+						"sends will likely fail until the key is rotated",
+						"account_alias", alias, "topic", nc.TopicARN)
+				}
+			}
 		default:
 			slog.Warn("unknown notifier type, skipped", "type", nc.Type)
 		}
