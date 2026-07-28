@@ -253,6 +253,14 @@ func fetchCapacityReservations(ctx context.Context, cfg aws.Config, acct config.
 			if cr.ReservationType == ec2types.CapacityReservationTypeCapacityBlock {
 				r.Type = model.TypeCB
 				r.Description = fmt.Sprintf("Capacity Block - %s", aws.ToString(cr.AvailabilityZone))
+				// Capacity = instances × accelerator cards per instance; fall back to
+				// vCPUs for non-GPU instance types. Stored in EquivCores so the UI
+				// can render it the same way as SP capacity.
+				if cards := GPUCardCount(r.InstanceType); cards > 0 {
+					r.EquivCores = float64(total * cards)
+				} else if vcpu := vCPUCount(r.InstanceType); vcpu > 0 {
+					r.EquivCores = float64(total * vcpu)
+				}
 				cbs = append(cbs, r)
 			} else {
 				r.Type = model.TypeODCR

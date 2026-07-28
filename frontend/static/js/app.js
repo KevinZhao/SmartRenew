@@ -378,12 +378,13 @@ createApp({
             return gpuFamilyPrefixes.some(p => f.startsWith(p));
         }
         function formatCapacity(r) {
-            if (r.type !== 'sp' || !r.equiv_cores || r.equiv_cores <= 0) return '-';
+            if (r.type !== 'sp' && r.type !== 'cb') return '-';
+            if (!r.equiv_cores || r.equiv_cores <= 0) return '-';
             const n = r.equiv_cores;
             const unit = isGpuFamily(r.instance_type) ? 'cards' : 'cores';
             // Compute SP is approximate (depends on reference instance choice);
-            // family-scoped SPs are exact.
-            const isCompute = r.platform === 'Compute';
+            // family-scoped SPs and CBs are exact.
+            const isCompute = r.type === 'sp' && r.platform === 'Compute';
             const val = n >= 1 ? (isCompute ? Math.round(n) : n.toFixed(n >= 10 ? 0 : 2)) : n.toFixed(2);
             const prefix = isCompute ? '~' : '';
             return prefix + val + ' ' + unit;
