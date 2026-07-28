@@ -282,13 +282,14 @@ createApp({
                 if (r.type === 'odcr') odcr++;
                 if (r.type === 'ri') ri++;
                 if ((r.type === 'odcr' || r.type === 'cb') && r.used_count < r.quantity && r.status === 'active') idle++;
-                if (r.end_time && !isZeroTime(r.end_time)) {
-                    const days = (new Date(r.end_time) - now) / 86400000;
-                    if (days <= 0) expired++;
-                    else if (days <= 7) critical++;
-                    else if (days <= 30) warning++;
-                    else active++;
-                } else { active++; }
+                // Use the same whole-day count as the table and the backend, so
+                // a resource cannot land in one bucket here and another there.
+                const days = daysUntil(r.end_time, now);
+                if (days === null) { active++; }
+                else if (days <= 0) expired++;
+                else if (days <= 7) critical++;
+                else if (days <= 30) warning++;
+                else active++;
             });
             return { total, expired, critical, warning, active, sp, cb, odcr, ri, idle };
         });
@@ -312,9 +313,12 @@ createApp({
             try { return new Date(d).toLocaleDateString('zh-CN'); } catch { return d; }
         }
 
-        function daysUntil(d) {
+        // Whole days until d, rounding any remaining fraction up — mirrors
+        // model.DaysUntil on the server so the table, the stat cards and the
+        // API all report the same number. Returns null when there is no expiry.
+        function daysUntil(d, now = new Date()) {
             if (isZeroTime(d)) return null;
-            return Math.ceil((new Date(d) - new Date()) / 86400000);
+            return Math.ceil((new Date(d) - now) / 86400000);
         }
 
         function daysClass(days) {

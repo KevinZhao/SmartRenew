@@ -19,7 +19,7 @@ import (
 // ReservationStore is the subset of store operations the handler needs.
 type ReservationStore interface {
 	List(typeFilter, accountFilter string) ([]model.Reservation, error)
-	GetAlerts(maxDays int) ([]model.Alert, error)
+	GetAlerts(maxDays int, remindDays ...int) ([]model.Alert, error)
 	Upsert(r model.Reservation) error
 	ListGPUCoverage(accountFilter string) ([]model.GPUCoverage, error)
 	Ping() error
@@ -142,7 +142,7 @@ func (h *Handler) listReservations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getAlerts(w http.ResponseWriter, r *http.Request) {
-	alerts, err := h.store.GetAlerts(h.cfg.MaxRemindDays())
+	alerts, err := h.store.GetAlerts(h.cfg.MaxRemindDays(), h.cfg.RemindDays...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -237,8 +237,15 @@ func (h *Handler) exportCSV(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// maxImportBytes caps the whole upload. ParseMultipartForm's argument is only
+// the in-memory buffer — anything above it spills to a temp file, so without
+// this the request body is effectively unbounded and a large upload could fill
+// the container's /tmp volume.
+const maxImportBytes = 32 << 20 // 32 MiB
+
 func (h *Handler) importCSV(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportBytes)
+	if err := r.ParseMultipartForm(maxImportBytes); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("parse form: %v", err))
 		return
 	}

@@ -20,7 +20,9 @@ func vCPUCount(instanceType string) int {
 	}
 	size := instanceType[idx+1:]
 	switch size {
-	case "nano", "micro", "small", "medium":
+	case "nano", "micro", "small":
+		return 1
+	case "medium":
 		return 2
 	case "large":
 		return 2

@@ -26,7 +26,9 @@ type fakeStore struct {
 func (f *fakeStore) List(typeFilter, accountFilter string) ([]model.Reservation, error) {
 	return []model.Reservation{{ResourceID: "sp-123", Type: "sp"}}, nil
 }
-func (f *fakeStore) GetAlerts(maxDays int) ([]model.Alert, error)          { return nil, nil }
+func (f *fakeStore) GetAlerts(maxDays int, remindDays ...int) ([]model.Alert, error) {
+	return nil, nil
+}
 func (f *fakeStore) Upsert(r model.Reservation) error                      { return nil }
 func (f *fakeStore) Ping() error                                           { return f.pingErr }
 func (f *fakeStore) ListGPUCoverage(a string) ([]model.GPUCoverage, error) { return nil, nil }

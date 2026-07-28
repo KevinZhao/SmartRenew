@@ -32,7 +32,20 @@ go test -cover ./...       # with coverage
 go test ./store/...        # single package
 ```
 
-Tests exist for `auth/`, `config/` and `handler/`. Other packages have none yet.
+Tests exist for `auth/`, `config/`, `csvutil/`, `handler/`, `model/`, `notifier/`,
+`scheduler/` and `store/`. `provider/` is only lightly covered (the AWS API calls
+themselves are untested).
+
+### Timestamp storage
+
+SQLite has no date type and compares TEXT lexicographically, so every timestamp
+column is stored as UTC in a single format (`2006-01-02 15:04:05`, see
+`store.sqlTimeLayout`) and range queries wrap columns in `julianday()`.
+
+Do NOT store RFC3339: its `T` separator (0x54) sorts after the space (0x20) that
+`datetime('now')` emits, so a same-day expiry compares as greater than "now" and
+already-expired resources leak into alerts. Offsets like `+08:00` break ordering
+the same way. `store.migrate()` normalises legacy rows written in RFC3339.
 
 ## Config
 

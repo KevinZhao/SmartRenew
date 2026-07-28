@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
@@ -45,14 +46,49 @@ func (s *SNSNotifier) SendGPUAlerts(items []model.GPUCoverage) error {
 	return s.publish(subject, buildGPUODText(items))
 }
 
+// snsMaxMessageBytes is the SNS Publish limit for the message body (256 KiB),
+// minus a small margin for the request envelope. Exceeding it makes Publish
+// fail outright, so a long alert list must be truncated rather than dropped.
+const snsMaxMessageBytes = 256*1024 - 1024
+
+const snsTruncationNotice = "\n\n... message truncated: too many alerts to fit in one notification. See the SmartRenew UI for the full list.\n"
+
+// truncateMessage caps body at the SNS limit, cutting on a rune boundary so the
+// result stays valid UTF-8, and appends a notice so the reader knows the list
+// is incomplete.
+func truncateMessage(body string) string {
+	if len(body) <= snsMaxMessageBytes {
+		return body
+	}
+	keep := snsMaxMessageBytes - len(snsTruncationNotice)
+	// Back off to a rune boundary: a raw byte cut can split a multi-byte rune.
+	for keep > 0 && !utf8.RuneStart(body[keep]) {
+		keep--
+	}
+	return body[:keep] + snsTruncationNotice
+}
+
+// truncateSubject caps the subject at the SNS limit of 100 characters, on a
+// rune boundary.
+func truncateSubject(subject string) string {
+	const max = 100
+	if len(subject) <= max {
+		return subject
+	}
+	keep := max
+	for keep > 0 && !utf8.RuneStart(subject[keep]) {
+		keep--
+	}
+	return subject[:keep]
+}
+
 func (s *SNSNotifier) publish(subject, body string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	// SNS Subject: max 100 chars, no control chars / newlines
-	if len(subject) > 100 {
-		subject = subject[:100]
-	}
+	subject = truncateSubject(subject)
+	body = truncateMessage(body)
 
 	_, err := s.client.Publish(ctx, &sns.PublishInput{
 		TopicArn: aws.String(s.topicARN),

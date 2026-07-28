@@ -35,12 +35,11 @@ func SyncAccount(ctx context.Context, acct config.Account) ([]model.Reservation,
 
 	// SP is a global API — fetch once using the first region.
 	spCfg := buildAWSConfig(acct, acct.Regions[0])
-	spItems, err := fetchSavingsPlans(ctx, spCfg, acct)
-	if err != nil {
-		errs = append(errs, fmt.Errorf("%s/SP: %w", acct.Alias, err))
-	} else {
-		all = append(all, spItems...)
+	spItems, spErrs := fetchSavingsPlans(ctx, spCfg, acct)
+	for _, e := range spErrs {
+		errs = append(errs, fmt.Errorf("%s/SP: %w", acct.Alias, e))
 	}
+	all = append(all, spItems...)
 
 	// CB, ODCR, RI are regional — fetch per region.
 	for _, region := range acct.Regions {
@@ -122,9 +121,11 @@ func SyncAccount(ctx context.Context, acct config.Account) ([]model.Reservation,
 	return all, errs
 }
 
-func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account) ([]model.Reservation, error) {
+// fetchSavingsPlans returns the account's savings plans. Plans whose expiry
+// cannot be parsed are skipped and reported in errs rather than stored with a
+// zero end date, which would make them silently un-alertable.
+func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account) (results []model.Reservation, errs []error) {
 	client := savingsplans.NewFromConfig(cfg)
-	var results []model.Reservation
 	var nextToken *string
 
 	for {
@@ -132,7 +133,7 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 			NextToken: nextToken,
 		})
 		if err != nil {
-			return nil, err
+			return results, append(errs, err)
 		}
 		for _, sp := range out.SavingsPlans {
 			var startTime, endTime time.Time
@@ -145,7 +146,13 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 			}
 			if sp.End != nil {
 				if t, err := time.Parse(time.RFC3339, *sp.End); err != nil {
-					slog.Warn("parse SP end time", "sp_id", aws.ToString(sp.SavingsPlanId), "err", err)
+					// A plan whose expiry we cannot read must not be stored with
+					// a zero end date: it would silently never alert. Surface it
+					// as an error so the account is treated as a partial failure
+					// and existing rows are preserved.
+					errs = append(errs, fmt.Errorf("SP %s: unparseable end time %q: %w",
+						aws.ToString(sp.SavingsPlanId), *sp.End, err))
+					continue
 				} else {
 					endTime = t
 				}
@@ -196,7 +203,7 @@ func fetchSavingsPlans(ctx context.Context, cfg aws.Config, acct config.Account)
 			break
 		}
 	}
-	return results, nil
+	return results, errs
 }
 
 // fetchCapacityReservations fetches all capacity reservations in one API call

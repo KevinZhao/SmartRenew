@@ -60,41 +60,49 @@ func (sc *Scheduler) SyncAll(ctx context.Context) (int, []error) {
 		allErrors = append(allErrors, errs...)
 
 		if len(errs) == 0 && len(items) > 0 {
-			if err := sc.store.DeleteByAccountID(acct.AccountID); err != nil {
-				allErrors = append(allErrors, err)
+			// Fully successful fetch: swap the account's rows atomically so
+			// readers never observe a half-populated (or empty) account.
+			if err := sc.store.ReplaceAccount(acct.AccountID, items); err != nil {
+				allErrors = append(allErrors, fmt.Errorf("replace account %s: %w", acct.Alias, err))
+			} else {
+				total += len(items)
 			}
-		} else if len(errs) > 0 {
-			slog.Warn("partial sync failure, skipping delete to preserve existing rows",
-				"account", acct.Alias, "errors", len(errs))
-		}
-
-		for _, item := range items {
-			if err := sc.store.Upsert(item); err != nil {
-				allErrors = append(allErrors, err)
-				continue
+		} else {
+			if len(errs) > 0 {
+				slog.Warn("partial sync failure, upserting without purge to preserve existing rows",
+					"account", acct.Alias, "errors", len(errs))
 			}
-			total++
+			// Partial failure: merge what we did get, keeping existing rows.
+			for _, item := range items {
+				if err := sc.store.Upsert(item); err != nil {
+					allErrors = append(allErrors, err)
+					continue
+				}
+				total++
+			}
 		}
 
 		// GPU coverage check — same preservation rule.
 		gpuItems, gpuErrs := provider.CheckGPUCoverage(ctx, acct)
 		allErrors = append(allErrors, gpuErrs...)
 		if len(gpuItems) > 0 {
-			if len(gpuErrs) == 0 {
-				if err := sc.store.DeleteGPUCoverageByAccountID(acct.AccountID); err != nil {
-					allErrors = append(allErrors, err)
-				}
-			} else {
-				slog.Warn("partial gpu sync failure, skipping delete to preserve existing rows",
-					"account", acct.Alias, "errors", len(gpuErrs))
-			}
 			odCount := 0
 			for _, g := range gpuItems {
 				if g.Coverage == model.CoverageOnDemand {
 					odCount++
 				}
-				if err := sc.store.UpsertGPUCoverage(g); err != nil {
-					allErrors = append(allErrors, err)
+			}
+			if len(gpuErrs) == 0 {
+				if err := sc.store.ReplaceGPUCoverage(acct.AccountID, gpuItems); err != nil {
+					allErrors = append(allErrors, fmt.Errorf("replace gpu_coverage %s: %w", acct.Alias, err))
+				}
+			} else {
+				slog.Warn("partial gpu sync failure, upserting without purge to preserve existing rows",
+					"account", acct.Alias, "errors", len(gpuErrs))
+				for _, g := range gpuItems {
+					if err := sc.store.UpsertGPUCoverage(g); err != nil {
+						allErrors = append(allErrors, err)
+					}
 				}
 			}
 			slog.Info("gpu coverage check done", "account", acct.Alias, "gpu_instances", len(gpuItems), "on_demand", odCount)
@@ -111,7 +119,7 @@ func (sc *Scheduler) CheckAndNotify() {
 
 	maxDays := sc.cfg.MaxRemindDays()
 
-	alerts, err := sc.store.GetAlerts(maxDays)
+	alerts, err := sc.store.GetAlerts(maxDays, sc.cfg.RemindDays...)
 	if err != nil {
 		slog.Error("get alerts failed", "err", err)
 		return
@@ -120,7 +128,7 @@ func (sc *Scheduler) CheckAndNotify() {
 	// Filter out already-notified alerts (keyed on composite ID)
 	var pending []model.Alert
 	for _, a := range alerts {
-		notified, err := sc.store.HasNotified(a.ID, a.Level)
+		notified, err := sc.store.HasNotified(a.ID, a.NotifyKey(), a.EndTime)
 		if err != nil {
 			slog.Error("check notify log failed", "id", a.ID, "level", a.Level, "err", err)
 			continue
@@ -172,7 +180,9 @@ func (sc *Scheduler) CheckGPUODAndNotify() {
 		if g.Coverage != model.CoverageOnDemand {
 			continue
 		}
-		notified, err := sc.store.HasNotified(g.ID, model.LevelGPUOnDemand)
+		// GPU on-demand alerts are not tied to an expiry date, so they use the
+		// empty end_time slot: one alert per instance while it stays uncovered.
+		notified, err := sc.store.HasNotified(g.ID, string(model.LevelGPUOnDemand), time.Time{})
 		if err != nil {
 			slog.Error("check gpu notify log failed", "id", g.ID, "err", err)
 			continue
@@ -213,6 +223,22 @@ func (sc *Scheduler) CheckGPUODAndNotify() {
 	}
 }
 
+// notifyLogRetention is how long a notify_log entry is kept past the expiry it
+// refers to. Long enough that a resource cannot be re-alerted for the same
+// cycle, short enough that the table does not grow without bound.
+const notifyLogRetention = 90 * 24 * time.Hour
+
+func (sc *Scheduler) pruneNotifyLog() {
+	removed, err := sc.store.PruneNotifyLog(notifyLogRetention)
+	if err != nil {
+		slog.Error("prune notify_log failed", "err", err)
+		return
+	}
+	if removed > 0 {
+		slog.Info("pruned stale notify_log entries", "rows", removed)
+	}
+}
+
 // StartCron starts periodic sync and notification checks.
 // Triggers an immediate sync on startup, then runs on intervals.
 func (sc *Scheduler) StartCron(ctx context.Context) {
@@ -231,6 +257,7 @@ func (sc *Scheduler) StartCron(ctx context.Context) {
 		}
 		sc.CheckAndNotify()
 		sc.CheckGPUODAndNotify()
+		sc.pruneNotifyLog()
 
 		for {
 			select {
@@ -245,6 +272,7 @@ func (sc *Scheduler) StartCron(ctx context.Context) {
 				for _, e := range errs {
 					slog.Error("sync error", "err", e)
 				}
+				sc.pruneNotifyLog()
 			case <-alertTicker.C:
 				sc.CheckAndNotify()
 				sc.CheckGPUODAndNotify()
